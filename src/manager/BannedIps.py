@@ -1,6 +1,6 @@
 from threading import Lock
 
-from src.interfaces.Manager import ListManager
+from src.interface.Manager import ListManager
 
 class BannedIps(ListManager):
     _bannedIps:set[str] = []

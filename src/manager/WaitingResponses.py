@@ -1,7 +1,7 @@
 from threading import Condition, Lock
 from time import time
 
-from src.interfaces.Manager import ObjectIndexedKVManager
+from src.interface.Manager import ObjectIndexedKVManager
 from src.model.WaitingResponse import WAITING_RESPONSE_KEY, WaitingResponse
 from src.protocol.ProgramProtocol import WAITING_RESPONSES_GC_SECS
 

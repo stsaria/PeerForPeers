@@ -4,7 +4,7 @@ from threading import Lock, Thread
 from src.model.EncryptCollection import PrivateEncryptCollection
 from src.model.NodeIdentify import NodeIdentify
 from src.manager.WaitingResponses import WaitingResponses
-from src.manager.IpToEd25519PubKeys import IpToEd25519PubKeys
+from manager.IpAndPortToEd25519PubKeys import IpToEd25519PubKeys
 from src.model.WaitingResponse import WaitingResponse
 from src.core.ExtendedNet import ExtendedNet
 from src.util.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
@@ -34,7 +34,7 @@ class PrivateSecureNet(ExtendedNet):
     def hello(self, nodeIdentify:NodeIdentify) -> bool:
         waitingResponse = WaitingResponse(
             nodeIdentify=nodeIdentify,
-            waitingNetInst=self,
+            waitingInst=self,
             waitingType=PacketModeFlag.RESP_HELLO,
             otherInfo=sid
         )
@@ -67,7 +67,7 @@ class PrivateSecureNet(ExtendedNet):
             ),
             nodeIdentify
         )
-        if not IpToEd25519PubKeys.put(nodeIdentify.ip, nodeIdentify.ed25519PublicKey):
+        if not IpToEd25519PubKeys.put((nodeIdentify.ip, nodeIdentify.port), nodeIdentify.ed25519PublicKey):
             return False
         e.deriveAesKey(AesKeyInfoBase.PRIVATE_SECURE.format(pubKeyRaw).encode(STR_ENCODE))
         with self._encryptCollectionsLock:
@@ -107,7 +107,7 @@ class PrivateSecureNet(ExtendedNet):
                 port=addr[1],
                 ed25519PublicKey=ed25519.getPubKeyByPubKeyBytes(ed25519PubKeyB)
             ),
-            waitingNetInst=self,
+            waitingInst=self,
             waitingType=PacketModeFlag.SECOND_HELLO,
             otherInfo=nextSid
         )
@@ -134,7 +134,7 @@ class PrivateSecureNet(ExtendedNet):
             WaitingResponses.delete(waitingResponse)
             return
         WaitingResponses.delete(waitingResponse)
-        if not IpToEd25519PubKeys.put(addr[0], ed25519.getPubKeyByPubKeyBytes(ed25519PubKeyB)):
+        if not IpToEd25519PubKeys.put(addr, ed25519.getPubKeyByPubKeyBytes(ed25519PubKeyB)):
             return
         encryptCollection.deriveAesKey(AesKeyInfoBase.PRIVATE_SECURE.format(ed25519PubKeyB).encode(STR_ENCODE))
         with self._encryptCollectionsLock:

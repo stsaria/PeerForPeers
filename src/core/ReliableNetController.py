@@ -20,7 +20,7 @@ class ReliableRecvFailed(Exception):
     pass
 
 class ReliableNet:
-    def init(self, netObj:ExtendedNet, ed25519PrivateKey:Ed25519PrivateKey):
+    def __init__(self, netObj:ExtendedNet, ed25519PrivateKey:Ed25519PrivateKey):
         self._net = netObj
         self._ed25519PrivateKey = ed25519PrivateKey
         self._sessions:dict[bytes, ReliableSession] = {}
@@ -74,7 +74,7 @@ class ReliableNet:
     def send(self, nodeIdentify:NodeIdentify, sid:bytes, sendDataGenerator:Generator[bytes, None, None], size:int) -> bool:
         waitingResponse = WaitingResponse(
             nodeIdentify=nodeIdentify,
-            waitingNetInst=self,
+            waitingInst=self,
             waitingType=PacketModeFlag.RESP_HELLO,
             otherInfoInKey=sid
         )   
@@ -98,9 +98,6 @@ class ReliableNet:
         e.otherPartyX25519PubKey = r
         e.deriveSharedSecretByX25519(X25519DeriveInfoBase.RELIABLE)
         e.deriveAesKey(X25519AndAesKeyInfoBase.RELIABLE)
-
-        with self._sendRedundancyCountLock:
-            self._sendRedundancyCount[e.sharedSecret] = 0
 
         chunk = []
         cache = b""
@@ -136,21 +133,22 @@ class ReliableNet:
     def recvFor(self, id:bytes, size:int, otherPartyEd25519PublicKey:Ed25519PublicKey) -> Generator[bytes, None, None]:
         recvGen = yield
         with self._sessionsLock:
-            s = self._sessions[id] = ReliableSession(
+            s = ReliableSession(
                 sessionId=id,
                 recvGenerator=recvGen,
                 size=size,
                 otherPartyEd25519PublicKey=otherPartyEd25519PublicKey
             )
-            s.calcChunks()
+            s.calcChunks() = ReliableSession
+            self._sessions[id] = s
         return recvGen
     def _recvHello(self, session:ReliableSession, mD:bytes, addr:tuple[str, int]) -> None:
-        x25519PubKeyB, signnedB = bytesSplitter.split(
+        x25519PubKeyB, signedB = bytesSplitter.split(
             mD,
             ReliablePacketElementSize.X25519_PUBLIC_KEY,
             ReliablePacketElementSize.ED25519_SIGN
         )
-        if not ed25519.verify(x25519PubKeyB, signnedB, session.otherPartyEd25519PublicKey):
+        if not ed25519.verify(x25519PubKeyB, signedB, session.otherPartyEd25519PublicKey):
             return
         e = EncryptCollection(
             salt=os.urandom(SecurePacketElementSize.AES_SALT),
@@ -177,14 +175,14 @@ class ReliableNet:
         key:WAITING_RESPONSE_KEY = (addr[0], addr[1], self, PacketModeFlag.RESP_HELLO, session.sessionId)
         if not WaitingResponses.containsKey(key):
             return
-        x25519PubKeyB, aesSaltB, signnedB = bytesSplitter.split(
+        x25519PubKeyB, aesSaltB, signedB = bytesSplitter.split(
             mD,
             ReliablePacketElementSize.X25519_PUBLIC_KEY,
             ReliablePacketElementSize.AES_SALT,
             ReliablePacketElementSize.ED25519_SIGN
         )
         wR = WaitingResponses.getWaitingResponseObjByKey(key)
-        if not ed25519.verify(x25519PubKeyB, signnedB, wR.nodeIdentify.ed25519PublicKey):
+        if not ed25519.verify(x25519PubKeyB, signedB, wR.nodeIdentify.ed25519PublicKey):
             return
         WaitingResponses.updateValue(key, (x25519PubKeyB, aesSaltB))
     def _finishRecv(self, session:ReliableSession, sendRest:bool = True) -> None:
@@ -260,11 +258,11 @@ class ReliableNet:
         ):
             self._finishRecv(session)
     def _recvChunkCheck(self, session:ReliableSession, mD:bytes, addr:tuple[str, int]) -> None:
-        signned = bytesSplitter.split(
+        signed = bytesSplitter.split(
             mD,
             ReliablePacketElementSize.ED25519_SIGN
         )
-        if not ed25519.verify(itob(session.get(ReliableSessionElementKey.NOW_CHUNK), ReliablePacketElementSize.SEQ_AND_CHUNK_COUNT, ENDIAN), signned, session.otherPartyEd25519PublicKey):
+        if not ed25519.verify(itob(session.get(ReliableSessionElementKey.NOW_CHUNK), ReliablePacketElementSize.SEQ_AND_CHUNK_COUNT, ENDIAN), signed, session.otherPartyEd25519PublicKey):
             return
         missingSeqs = self._getChunkMissingPacketSeqs(session)
         missingSeqsB = b"".join([itob(s, ReliablePacketElementSize.SEQ_AND_CHUNK_COUNT, ENDIAN) for s in missingSeqs])
@@ -282,7 +280,7 @@ class ReliableNet:
         key:WAITING_RESPONSE_KEY = (addr[0], addr[1], self, PacketModeFlag.RESP_CHUNK_CHECK, session.sessionId)
         if not WaitingResponses.containsKey(key):
             return
-        signned, badPacketSeqsB = bytesSplitter.split(
+        signed, badPacketSeqsB = bytesSplitter.split(
             mD,
             ReliablePacketElementSize.ED25519_SIGN,
             includeRest=True
@@ -290,7 +288,7 @@ class ReliableNet:
         if len(badPacketSeqsB) % ReliablePacketElementSize.SEQ_AND_CHUNK_COUNT:
             return
         wR = WaitingResponses.getWaitingResponseObjByKey(key)
-        if not ed25519.verify(wR.otherInfo+badPacketSeqsB, signned, wR.nodeIdentify.ed25519PublicKey):
+        if not ed25519.verify(wR.otherInfo+badPacketSeqsB, signed, wR.nodeIdentify.ed25519PublicKey):
             return
         badPacketSeqs = [
             btoi(
@@ -322,7 +320,8 @@ class ReliableNet:
                 data,
                 ReliablePacketElementSize.PACKET_FLAG,
                 ReliablePacketElementSize.MODE_FLAG,
-                ReliablePacketElementSize.SESSION_ID
+                ReliablePacketElementSize.SESSION_ID,
+                includeRest=True
             )
             if pFlag != PacketFlag.RELIABLE.value:
                 continue

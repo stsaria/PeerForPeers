@@ -1,0 +1,31 @@
+from enum import IntEnum
+
+class AppElementSize:
+    APP_FLAG = 1
+    MODE_FLAG = 1
+
+class GlobalAppElementSize(AppElementSize):
+    TIMESTAMP = 8
+    ED25519_PUBLIC_KEY = 32
+    ED25519_SIGN = 64
+    UUID_V4 = 16
+    NODES_LIMIT_FOR_GET = 2
+
+class IAmInfoElementSize:
+    MAJOR = 100
+
+
+class AppFlag(IntEnum):
+    GLOBAL = 1
+    DIRECT = 2
+
+class AppModeFlag(IntEnum):
+    HELLO = 1
+    RESP_HELLO = 2
+
+    GET_NODES = 10
+    RESP_GET_NODES = 11
+    GET_MESSAGES = 12
+    RESP_GET_MESSAGES = 13
+
+

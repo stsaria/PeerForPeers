@@ -1,7 +1,7 @@
 from typing import Generator
 from threading import Lock, Thread
 
-from src.manager.IpToEd25519PubKeys import IpToEd25519PubKeys
+from manager.IpAndPortToEd25519PubKeys import IpToEd25519PubKeys
 from src.model.EncryptCollection import EncryptCollection
 from src.model.NodeIdentify import NodeIdentify
 from src.manager.WaitingResponses import WaitingResponses
@@ -29,7 +29,7 @@ class SecureNet(ExtendedNet):
     def hello(self, nodeIdentify:NodeIdentify) -> bool:
         waitingResponse = WaitingResponse(
             nodeIdentify=nodeIdentify,
-            waitingNetInst=self,
+            waitingInst=self,
             waitingType=PacketModeFlag.RESP_HELLO,
             otherInfo=sid
         )
@@ -47,7 +47,7 @@ class SecureNet(ExtendedNet):
             WaitingResponses.delete(waitingResponse)
             return False
         WaitingResponses.delete(waitingResponse)
-        if not IpToEd25519PubKeys.put(nodeIdentify.ip, nodeIdentify.ed25519PublicKey):
+        if not IpToEd25519PubKeys.put((nodeIdentify.ip, nodeIdentify.port), nodeIdentify.ed25519PublicKey):
             return False
         e = EncryptCollection(
             salt=r[2],
@@ -117,7 +117,7 @@ class SecureNet(ExtendedNet):
                 addr[1],
                 ed25519.getPubKeyByPubKeyBytes(ed25519PubKeyB)
             ),
-            waitingNetInst=self,
+            waitingInst=self,
             waitingType=PacketModeFlag.SECOND_HELLO,
             otherInfo=nextSid
         )
@@ -134,7 +134,7 @@ class SecureNet(ExtendedNet):
             WaitingResponses.delete(waitingResponse)
             return
         WaitingResponses.delete(waitingResponse)
-        if not IpToEd25519PubKeys.put(addr[0], waitingResponse.nodeIdentify.ed25519PublicKey):
+        if not IpToEd25519PubKeys.put(addr, waitingResponse.nodeIdentify.ed25519PublicKey):
             return
         e.otherPartyX25519PubKey = encrypter.getX25519PubKeyByPubKeyBytes(r)
         e.deriveSharedSecretByX25519(X25519DeriveInfoBase.SECURE)
@@ -173,7 +173,7 @@ class SecureNet(ExtendedNet):
         key:WAITING_RESPONSE_KEY = (addr[0], addr[1], self, PacketModeFlag.RESP_HELLO, None)
         if not WaitingResponses.containsKey(key):
             return
-        nextSessionIdB, x25519PubKeyB, aesSaltB, signnedB = bytesSplitter.split(
+        nextSessionIdB, x25519PubKeyB, aesSaltB, signedB = bytesSplitter.split(
             mD,
             ANY_SESSION_ID_SIZE,
             SecurePacketElementSize.X25519_PUBLIC_KEY,
@@ -182,20 +182,20 @@ class SecureNet(ExtendedNet):
         )
 
         wR = WaitingResponses.getWaitingResponseObjByKey(key)
-        if not ed25519.verify(wR.otherInfo+nextSessionIdB+x25519PubKeyB+aesSaltB, signnedB, wR.nodeIdentify.ed25519PublicKey):
+        if not ed25519.verify(wR.otherInfo+nextSessionIdB+x25519PubKeyB+aesSaltB, signedB, wR.nodeIdentify.ed25519PublicKey):
             return
         WaitingResponses.updateValue(key, (nextSessionIdB, x25519PubKeyB, aesSaltB))
     def _recvSecondHello(self, mD:bytes, addr:tuple[str, int]) -> None:
         key:WAITING_RESPONSE_KEY = (addr[0], addr[1], self, PacketModeFlag.SECOND_HELLO, None)
         if not WaitingResponses.containsKey(key):
             return
-        x25519PubKeyB, signnedB = bytesSplitter.split(
+        x25519PubKeyB, signedB = bytesSplitter.split(
             mD,
             SecurePacketElementSize.X25519_PUBLIC_KEY,
             SecurePacketElementSize.ED25519_SIGN
         )
         wR = WaitingResponses.getWaitingResponseObjByKey(key)
-        if not ed25519.verify(wR.otherInfo+x25519PubKeyB, signnedB, wR.nodeIdentify.ed25519PublicKey):
+        if not ed25519.verify(wR.otherInfo+x25519PubKeyB, signedB, wR.nodeIdentify.ed25519PublicKey):
             return
         WaitingResponses.updateValue(key, x25519PubKeyB)
     def recv(self) -> Generator[tuple[bytes, tuple[str, int]], None, None]:
@@ -203,7 +203,8 @@ class SecureNet(ExtendedNet):
             pFlag, mFlag, mainData = bytesSplitter.split(
                 data,
                 SecurePacketElementSize.PACKET_FLAG,
-                SecurePacketElementSize.MODE_FLAG
+                SecurePacketElementSize.MODE_FLAG,
+                includeRest=True
             )
             if pFlag != PacketFlag.SECURE.value:
                 continue

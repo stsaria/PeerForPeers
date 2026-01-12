@@ -1,15 +1,16 @@
 from dataclasses import dataclass
+from typing import Hashable
 from enum import Enum
 
 from src.core.Net import Net
 from src.model.NodeIdentify import NodeIdentify
 
-WAITING_RESPONSE_KEY = tuple[str, int, Net, Enum | tuple[Enum], bytes | None]
+WAITING_RESPONSE_KEY = tuple[str, int, Hashable, Enum | tuple[Enum], bytes | None]
 
 @dataclass(frozen=True, kw_only=True)
 class WaitingResponse:
     nodeIdentify:NodeIdentify
-    waitingNetInst:Net
+    waitingInst:Hashable
     waitingType:Enum
     otherInfoInKey:bytes | None = None
     otherInfo:object | None = None

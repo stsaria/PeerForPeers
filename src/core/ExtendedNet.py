@@ -16,7 +16,7 @@ from src.util.bytesCoverter import itob
 
 class ExtendedNet(Net):
     _shareVars = ["_netConfig", "_sock", "_gens", "_gensLock", "_started", "_startedLock"]
-    def __init__(self, netConfig:NetConfig, doPong:bool=True):
+    def __init__(self, netConfig:NetConfig):
         super().__init__(netConfig)
 
         self._started = False
@@ -41,7 +41,7 @@ class ExtendedNet(Net):
                     node[1],
                     b""
                 ),
-            waitingNetInst=self,
+            waitingInst=self,
             waitingType=PacketModeFlag.PONG,
             otherInfoInKey=sid
         )
@@ -138,7 +138,7 @@ class ExtendedNet(Net):
             self._gens.remove(gen)
         gen.close()
     @classmethod
-    def share(cls, obj:"ExtendedNet") -> "ExtendedNet":
+    def getShareObj(cls, obj:"ExtendedNet") -> "ExtendedNet":
         newObj = cls.__new__(cls)
         for v in ExtendedNet._shareVars:
             newObj.__dict__[v] = obj.__dict__[v]

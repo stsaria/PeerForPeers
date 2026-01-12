@@ -72,7 +72,6 @@ class PrivateSecurePacketElementSize(PacketElementSize):
     AES_SALT=32
     SEQ=8
 
-
 class PacketFlag(IntEnum):
     PLAIN = 1
     SECURE = 2

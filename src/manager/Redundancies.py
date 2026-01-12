@@ -1,6 +1,6 @@
 from threading import Lock
 
-from src.interfaces.Manager import KVManager
+from src.interface.Manager import KVManager
 
 class Redundancies(KVManager):
     _ipRedundancies:dict[str, int] = {}

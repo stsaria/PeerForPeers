@@ -1,4 +1,4 @@
-from typing import Protocol, TypeVar
+from typing import Any, Protocol, TypeVar
 
 T = TypeVar("T")
 K = TypeVar("K")
@@ -53,3 +53,11 @@ class CannotDeleteAndWriteKVManager(Protocol[K, V]):
     def put(cls, *key:K, value:V) -> bool: ...
     @classmethod
     def get(cls, key:K) -> V | None: ...
+
+class MinimalKVManager(Protocol[K, V]):
+    @classmethod
+    def put(cls, key:K, value:V) -> Any: ...
+    @classmethod
+    def delete(cls, key:K) -> Any: ...
+    @classmethod
+    def get(cls, key:K) -> V | Any: ...

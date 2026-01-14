@@ -8,12 +8,20 @@ class GlobalAppElementSize(AppElementSize):
     TIMESTAMP = 8
     ED25519_PUBLIC_KEY = 32
     ED25519_SIGN = 64
-    UUID_V4 = 16
+    MESSAGE_ID = 16
     NODES_LIMIT_FOR_GET = 2
+    MESSAGES_LIMIT_FOR_GET = 2
+    IP_STR = 19
+    PORT = 2
+    MESSAGE_TYPE = 1
+    MESSAGE_SIZE = 2 # message content length's bytes size
 
 class IAmInfoElementSize:
     MAJOR = 100
 
+class MessageType(IntEnum):
+    MESSAGE = 1
+    REPLY_MESSAGE = 2
 
 class AppFlag(IntEnum):
     GLOBAL = 1
@@ -25,7 +33,8 @@ class AppModeFlag(IntEnum):
 
     GET_NODES = 10
     RESP_GET_NODES = 11
-    GET_MESSAGES = 12
-    RESP_GET_MESSAGES = 13
+    START_SEND_REQ = 12
+    GET_MESSAGES = 13
+    RESP_GET_MESSAGES = 14
 
 

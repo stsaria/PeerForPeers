@@ -206,10 +206,10 @@ class SecureNet(ExtendedNet):
                 SecurePacketElementSize.MODE_FLAG,
                 includeRest=True
             )
-            if pFlag != PacketFlag.SECURE.value:
+            if btoi(pFlag, ENDIAN) != PacketFlag.SECURE.value:
                 continue
             try:
-                mFlag = PacketModeFlag(mFlag)
+                mFlag = PacketModeFlag(btoi(mFlag, ENDIAN))
             except ValueError:
                 continue
 

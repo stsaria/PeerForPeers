@@ -3,8 +3,8 @@ from src.util.ed25519 import Ed25519PrivateKey
 
 @dataclass(kw_only=True)
 class NetConfig:
-    ipVersion:int
-    addr:tuple[str, int]
+    addrV4:tuple[str, int]
+    addrV6:tuple[str, int]
     buffer:int
 
 @dataclass(kw_only=True)

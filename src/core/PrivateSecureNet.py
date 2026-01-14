@@ -69,7 +69,7 @@ class PrivateSecureNet(ExtendedNet):
         )
         if not IpToEd25519PubKeys.put((nodeIdentify.ip, nodeIdentify.port), nodeIdentify.ed25519PublicKey):
             return False
-        e.deriveAesKey(AesKeyInfoBase.PRIVATE_SECURE.format(pubKeyRaw).encode(STR_ENCODE))
+        e.deriveAesKey(AesKeyInfoBase.PRIVATE_SECURE.format(pubKeyRaw).encode(STR_ENCODING))
         with self._encryptCollectionsLock:
             self._encryptCollections[nodeIdentify.ip, nodeIdentify.port] = e
         return True
@@ -136,7 +136,7 @@ class PrivateSecureNet(ExtendedNet):
         WaitingResponses.delete(waitingResponse)
         if not IpToEd25519PubKeys.put(addr, ed25519.getPubKeyByPubKeyBytes(ed25519PubKeyB)):
             return
-        encryptCollection.deriveAesKey(AesKeyInfoBase.PRIVATE_SECURE.format(ed25519PubKeyB).encode(STR_ENCODE))
+        encryptCollection.deriveAesKey(AesKeyInfoBase.PRIVATE_SECURE.format(ed25519PubKeyB).encode(STR_ENCODING))
         with self._encryptCollectionsLock:
             self._encryptCollections[*addr] = encryptCollection
     def _recvMainDataSynchronized(self, mD:bytes, addr:tuple[str, int]) -> bytes:
@@ -169,7 +169,12 @@ class PrivateSecureNet(ExtendedNet):
                 includeRest=True
             )
             mainData = mainData[:len(mainData)-1]
-            if pFlag != PacketFlag.PRIVATE_SECURE.value:
+            if btoi(pFlag, ENDIAN) != PacketFlag.PRIVATE_SECURE.value:
+                continue
+
+            try:
+                mFlag = PacketModeFlag(btoi(mFlag, ENDIAN))
+            except ValueError:
                 continue
 
             match mFlag:

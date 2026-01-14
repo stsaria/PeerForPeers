@@ -1,3 +1,5 @@
+# This file is editable for custom configurations
+
 TIME_OUT_MILLI_SEC = 5
 WAITING_RESPONSES_GC_SECS = TIME_OUT_MILLI_SEC*2
 PING_WINDOW = 17

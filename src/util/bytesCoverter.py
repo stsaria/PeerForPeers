@@ -13,3 +13,6 @@ def stob(s:str, size:int, encoding:str) -> bytes:
             break
         b += c.encode(encoding)
     return b
+
+def btos(b:bytes, encoding:str) -> str:
+    return b.strip(b"\x00").decode(encoding, errors="ignore")

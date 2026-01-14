@@ -72,10 +72,10 @@ class BaseDb(Generic[ModelT, RowT, PrimaryKeyT]):
 class Messages(BaseDb[AllMessageType, AllMessageSqlType, bytes]):
     @classmethod
     def put(cls, messageId:bytes, message:AllMessageType) -> MessagePutStatus:
-        if len(messageId) != GlobalAppElementSize.UUID_V4:
+        if len(messageId) != GlobalAppElementSize.MESSAGE_ID:
             logger.warning(f"{cls.TABLE}.put: invalid messageId size ({len(messageId)})")
             return MessagePutStatus.MESSAGE_ID_SIZE_IS_WRONG
-        if len(message.content.encode(STR_ENCODE)) > GlobalAppElementSize.MESSAGE_CONTENT:
+        if len(message.content.encode(STR_ENCODING)) > GlobalAppElementSize.MESSAGE_CONTENT:
             return MessagePutStatus.CONTENT_SIZE_IS_TOO_BIG
 
         sqlMsg = message.getSqlMsg()

@@ -323,10 +323,10 @@ class ReliableNet:
                 ReliablePacketElementSize.SESSION_ID,
                 includeRest=True
             )
-            if pFlag != PacketFlag.RELIABLE.value:
+            if btoi(pFlag, ENDIAN) != PacketFlag.RELIABLE.value:
                 continue
             try:
-                mFlag = PacketModeFlag(mFlag)
+                mFlag = PacketModeFlag(btoi(mFlag, ENDIAN))
             except ValueError:
                 continue
             with self._sessionsLock:

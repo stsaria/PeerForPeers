@@ -113,8 +113,6 @@ class ReliableNet:
         )
 
         for d in sendDataGenerator:
-            if (l := len(d)) > size:
-                raise ValueError(f"Bytes is too big {l}/{size}")
             cache += d
             while len(cache) >= mainDataSizePerPacket:
                 content = cache[0:mainDataSizePerPacket]

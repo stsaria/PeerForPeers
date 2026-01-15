@@ -4,7 +4,7 @@ from enum import Enum
 
 from src.protocol.Protocol import *
 from src.app.protocol.Protocol import *
-from src.app.model.Message import Message, ReplyMessage
+from src.app.model.Message import MyMessage, MyReplyMessage, OthersMessage
 from src.app.protocol.ProgramProtocol import *
 from src.app.util.Db import Db
 
@@ -16,9 +16,11 @@ class MessagePutStatus(Enum):
     CONTENT_SIZE_IS_TOO_BIG = 2
 
 MyMessageSqlType = tuple[bytes, str, int]
+MyReplyMessageSqlType = tuple[bytes, bytes, str, int]
+OthersMessageSqlType = tuple[bytes, bytes, str, int, bytes]
 
-AllMessageType = Message
-AllMessageSqlType = MyMessageSqlType
+AllMessageType = MyMessage | MyReplyMessage | OthersMessage
+AllMessageSqlType = MyMessageSqlType | MyReplyMessageSqlType
 
 from typing import Generic, TypeVar, Iterable
 
@@ -73,7 +75,7 @@ class Messages(BaseDb[AllMessageType, AllMessageSqlType, bytes]):
     @classmethod
     def put(cls, messageId:bytes, message:AllMessageType) -> MessagePutStatus:
         if len(messageId) != GlobalAppElementSize.MESSAGE_ID:
-            logger.warning(f"{cls.TABLE}.put: invalid messageId size ({len(messageId)})")
+            logger.warning(f"invalid messageId size ({len(messageId)})")
             return MessagePutStatus.MESSAGE_ID_SIZE_IS_WRONG
         if len(message.content.encode(STR_ENCODING)) > GlobalAppElementSize.MESSAGE_CONTENT:
             return MessagePutStatus.CONTENT_SIZE_IS_TOO_BIG
@@ -90,7 +92,7 @@ class MyMessages(Messages):
 
     TABLE = "myMessages"
     KEY_NAME = "messageId"
-    MODEL = Message
+    MODEL = MyMessage
 
     _db.execAndCommit("""
         CREATE TABLE IF NOT EXISTS myMessages (
@@ -100,15 +102,15 @@ class MyMessages(Messages):
         )
     """)
 
-class ReplyMessages(Messages):
+class MyReplyMessages(Messages):
     _db = Db(DB_FILE)
 
-    TABLE = "replyMessages"
+    TABLE = "myReplyMessages"
     KEY_NAME = "messageId"
-    MODEL = ReplyMessage
+    MODEL = MyReplyMessage
 
     _db.execAndCommit("""
-        CREATE TABLE IF NOT EXISTS replyMessages (
+        CREATE TABLE IF NOT EXISTS myReplyMessages (
             messageId BLOB PRIMARY KEY,
             rootMessageId BLOB NOT NULL,
             content TEXT NOT NULL,
@@ -116,15 +118,15 @@ class ReplyMessages(Messages):
         )
     """)
 
-class ReplyRootMessages(Messages):
+class OthersMessages(Messages):
     _db = Db(DB_FILE)
 
-    TABLE = "replyRootMessages"
+    TABLE = "othersMessages"
     KEY_NAME = "messageId"
-    MODEL = ReplyMessage
+    MODEL = OthersMessage
 
     _db.execAndCommit("""
-        CREATE TABLE IF NOT EXISTS replyRootMessages (
+        CREATE TABLE IF NOT EXISTS othersMessages (
             messageId BLOB PRIMARY KEY,
             publicKey BLOB NOT NULL,
             content TEXT NOT NULL,

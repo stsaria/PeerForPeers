@@ -36,5 +36,7 @@ class AppModeFlag(IntEnum):
     START_SEND_REQ = 12
     GET_MESSAGES = 13
     RESP_GET_MESSAGES = 14
+    GET_OTHERS_MESSAGE = 15
+    RESP_GET_OTHER_MESSAGE = 16
 
 

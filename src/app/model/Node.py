@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 
-from model.NodeIdentify import NodeIdentify
+from src.model.NodeIdentify import NodeIdentify
 from src.util.ed25519 import Ed25519PublicKey
 
 @dataclass(kw_only=True)

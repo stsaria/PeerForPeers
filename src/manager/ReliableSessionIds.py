@@ -1,7 +1,8 @@
-from threading import Condition, Lock
-from interface.Manager import TicketingManager
-from protocol.Protocol import ENDIAN, RELIABLE_SESSION_ID_SIZE, ReliablePacketElementSize
-from util.bytesCoverter import itob
+from threading import Condition
+
+from src.interface.Manager import TicketingManager
+from src.protocol.Protocol import ENDIAN, ReliablePacketElementSize
+from src.util.bytesCoverter import itob
 
 class ReliableSessionIds(TicketingManager):
     usedIds:set[bytes] = set()

@@ -1,8 +1,7 @@
 from enum import Enum
-from threading import Lock
 from typing import Callable
+
 from interface.Manager import CannotDeleteKVManager
-from util import metaPro
 
 class CustomFunc(Enum):
     GET_I_AM = "getIAm"

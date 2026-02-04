@@ -5,7 +5,7 @@ from threading import Lock
 from typing import Any, Generator
 
 from src.protocol.Protocol import *
-from model.EncryptCollection import EncryptCollection
+from src.model.EncryptCollection import EncryptCollection
 from src.util.ed25519 import Ed25519PublicKey
 
 class ReliableSessionElementKey(Enum):

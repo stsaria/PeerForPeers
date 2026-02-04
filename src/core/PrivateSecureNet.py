@@ -4,7 +4,7 @@ from threading import Lock, Thread
 from src.model.EncryptCollection import PrivateEncryptCollection
 from src.model.NodeIdentify import NodeIdentify
 from src.manager.WaitingResponses import WaitingResponses
-from manager.AddrToEd25519PubKeys import AddrToEd25519PubKeys
+from src.manager.AddrToEd25519PubKeys import AddrToEd25519PubKeys
 from src.model.WaitingResponse import WAITING_RESPONSE_KEY, WaitingResponse
 from src.core.ExtendedNet import ExtendedNet
 from src.util.ed25519 import Ed25519PrivateKey, Ed25519PublicKey

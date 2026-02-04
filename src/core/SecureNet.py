@@ -2,7 +2,7 @@ import random
 from typing import Generator
 from threading import Lock, Thread
 
-from manager.AddrToEd25519PubKeys import AddrToEd25519PubKeys
+from src.manager.AddrToEd25519PubKeys import AddrToEd25519PubKeys
 from src.model.EncryptCollection import EncryptCollection
 from src.model.NodeIdentify import NodeIdentify
 from src.manager.WaitingResponses import WaitingResponses

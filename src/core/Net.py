@@ -4,7 +4,7 @@ from socket import (
     SOCK_DGRAM,
     SOL_SOCKET, SO_REUSEADDR,
 )
-from typing import Generator, Tuple
+from typing import Generator
 import select
 
 from src.manager.BannedIps import BannedIps

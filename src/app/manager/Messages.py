@@ -13,8 +13,7 @@ logger = logging.getLogger(__name__)
 
 class MessagePutStatus(Enum):
     SUCCESS = 0
-    MESSAGE_ID_SIZE_IS_WRONG = 1
-    CONTENT_SIZE_IS_TOO_BIG = 2
+    CONTENT_SIZE_IS_TOO_BIG = 1
 
 MyMessageSqlType = tuple[bytes, str, int]
 MyReplyMessageSqlType = tuple[bytes, bytes, str, int]
@@ -74,11 +73,8 @@ class BaseDb(Generic[ModelT, RowT, PrimaryKeyT]):
     
 class Messages(BaseDb[AllMessageType, AllMessageSqlType, bytes]):
     @classmethod
-    def put(cls, messageId:bytes, message:AllMessageType) -> MessagePutStatus:
-        if len(messageId) != GlobalAppElementSize.MESSAGE_ID:
-            logger.warning(f"invalid messageId size ({len(messageId)})")
-            return MessagePutStatus.MESSAGE_ID_SIZE_IS_WRONG
-        if len(message.content.encode(STR_ENCODING)) > GlobalAppElementSize.MESSAGE_CONTENT:
+    def put(cls, message:AllMessageType) -> MessagePutStatus:
+        if len(message.content.encode(STR_ENCODING)) > MESSAGE_CONTENT_LIMIT:
             return MessagePutStatus.CONTENT_SIZE_IS_TOO_BIG
 
         sqlMsg = message.getSqlMsg()

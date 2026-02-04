@@ -30,3 +30,12 @@ class OthersMessage(MyMessage, Others):
     def getSqlMsg(self) -> tuple[bytes, bytes, str, int, bytes]:
         return (self.ed25519PubKey.public_bytes_raw(), self.messageId, self.content, self.timestamp, self.ed25519Sign)
 
+@dataclass(kw_only=True)
+class OthersReplyMessage(MyReplyMessage, Others):
+    def getSqlMsg(self) -> tuple[bytes, bytes, bytes, str, int, bytes]:
+        return (self.ed25519PubKey.public_bytes_raw(), self.messageId, self.rootMessageId, self.content, self.timestamp, self.ed25519Sign)
+
+@dataclass(kw_only=True)
+class MessageForSorting:
+    message:OthersMessage | MyMessage |  None
+    replies:list[OthersReplyMessage | MyReplyMessage]

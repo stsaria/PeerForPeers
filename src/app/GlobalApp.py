@@ -1,15 +1,18 @@
+import copy
 import json
 import logging
+import os
 import random
+import shutil
 import statistics
 from threading import Condition, Event, Lock, Thread
 from time import sleep, time
 from typing import Generator
 
-from src.app.manager.Messages import Messages, MyReplyMessages, MyReplyMessageSqlType, MyMessageSqlType, OthersMessageSqlType
+from src.app.manager.Messages import AllMessageType, MessagePutStatus, Messages, MyMessages, MyReplyMessages, MyReplyMessageSqlType, MyMessageSqlType, OthersMessageSqlType, OthersMessages
 from src.core.Gossiper import Gossiper
 from src.manager.CustomFuncs import CustomFunc, CustomFuncs
-from src.app.model.Message import MyMessage, OthersMessage, MyReplyMessage
+from src.app.model.Message import MessageForSorting, MyMessage, OthersMessage, MyReplyMessage, OthersReplyMessage
 from src.manager.AddrToEd25519PubKeys import AddrToEd25519PubKeys
 from src.manager.ReliableSessionIds import ReliableSessionIds
 from src.manager.WaitingResponses import WaitingResponses
@@ -55,6 +58,9 @@ class GlobalApp:
 
         self._ipAndPortToNodes:dict[tuple[str, int], Node] = {}
         self._ipAndPortToNodesCond:Condition = Condition(Lock())
+
+        self._messages:dict[bytes, MessageForSorting] = {}
+        self._messagesLock:Lock = Lock()
     
         logger.info("initialized.")
     
@@ -222,6 +228,53 @@ class GlobalApp:
                 with open(SAVED_PATH+FRIENDS_PUBKEYS_FILE, "w") as f:
                     f.write(json.dumps(list(self._friends)))
     
+    def postMessage(self, content:str) -> MessagePutStatus:
+        msg = MyMessage(
+            messageId=os.urandom(GlobalAppElementSize.MESSAGE_ID),
+            content=content,
+            timestamp=int(time())
+        )
+        return MyMessages.put(msg)
+
+    def postReplyMessage(self, rootMessage:OthersMessage, content:str) -> bool:
+        msg = MyReplyMessage(
+            messageId=os.urandom(GlobalAppElementSize.MESSAGE_ID),
+            rootMessageId=rootMessage.messageId,
+            content=content,
+            timestamp=int(time())
+        )
+        if MyReplyMessages.put(msg) != MessagePutStatus.SUCCESS:
+            return False
+        elif OthersMessages.put(rootMessage) != MessagePutStatus.SUCCESS:
+            return False
+        return True
+
+    def getMyMessages(self) -> list[MyMessage]:
+        return MyMessages.getAll()
+
+    def getMyReplyMessages(self) -> list[MyReplyMessage]:
+        return MyReplyMessages.getAll()
+
+    def getMessages(self, onlyOthers:bool = False) -> dict[OthersMessage, list[OthersMessage]]:
+        with self._messagesLock:
+            messages = copy.deepcopy(self._messages)
+        if onlyOthers:
+            return list(messages.values())
+        myMessages = MyMessages.getAll()
+        for message in myMessages:
+            if message.messageId in messages.keys():
+                messages[message.messageId].message = message
+        myReplyMessages = MyReplyMessages.getAll()
+        for message in myReplyMessages:
+            if message.rootMessageId in messages.keys():
+                messages[message.rootMessageId].replies.append(message)
+            else:
+                messages[message.rootMessageId] = MessageForSorting(
+                    message=None,
+                    replies=[message]
+                )
+        return list(messages.values())
+
     def _waitAndAddFriendNode(self, pubKey:bytes) -> None:
         nI = self._gossiper.waitAndGetNodeByPublicKey(pubKey, None)
         if not self.hello(nI):
@@ -416,12 +469,13 @@ class GlobalApp:
                     ):
                         logger.warning(f"signature verification failed for reply message.")
                         continue
-                    message = MyReplyMessage(
+                    message = OthersReplyMessage(
+                        ed25519PubKey=nodeIdentify.ed25519PublicKey,
+                        ed25519Sign=signed,
                         messageId=messageId,
                         rootMessageId=rootMessageId,
                         content=messageContent,
-                        timestamp=timestamp,
-                        nodeIdentify=nodeIdentify
+                        timestamp=timestamp
                     )
                 if messageType == MessageType.MESSAGE:
                     if not ed25519.verify(
@@ -434,11 +488,12 @@ class GlobalApp:
                     ):
                         logger.warning(f"signature verification failed for message.")
                         continue
-                    message = MyMessage(
+                    message = OthersMessage(
+                        ed25519PubKey=nodeIdentify.ed25519PublicKey,
+                        ed25519Sign=signed,
                         messageId=messageId,
                         content=messageContent,
-                        timestamp=timestamp,
-                        nodeIdentify=nodeIdentify
+                        timestamp=timestamp
                     )
                 messages.append(message)
                 if len(messages) >= limit:
@@ -447,7 +502,7 @@ class GlobalApp:
         logger.debug(f"collected {len(messages)} messages.")
         return messages
 
-    def _getOtherMessage(self, nodeIdentify:NodeIdentify, messageId:bytes) -> OthersMessage | None:
+    def _getOthersMessage(self, nodeIdentify:NodeIdentify, messageId:bytes) -> OthersMessage | None:
         logger.debug(f"{nodeIdentify.port}")
         waitingResponse = WaitingResponse(
             nodeIdentify,
@@ -873,12 +928,31 @@ class GlobalApp:
                         if not self._ipAndPortToNodes.get((nI.ip, nI.port)):
                             self.hello(nI)
             sortedNodes = CustomFuncs.get(CustomFunc.GET_SORTED_NODES)(list(self._ipAndPortToNodes.values()))
-        messages = []
+        messages:list[tuple[NodeIdentify, AllMessageType]] = []
+        messagesTree:dict[bytes, MessageForSorting] = {}
+        unknows:set[tuple[NodeIdentify, bytes]] = set()
         for n in sortedNodes:
             if len(messages) >= MESSAGES_LIMIT_FOR_GET:
                 break
             if m := self._getMessages(n, min(MESSAGES_LIMIT_FOR_GET - len(messages), MESSAGES_LIMIT_FOR_GET)):
-                messages.extend(m)
+                messages.extend([(n, mI) for mI in m])
+        for n, m in messages:
+            if isinstance(m, MyReplyMessage):
+                if m.rootMessageId not in messagesTree:
+                    messagesTree[m.rootMessageId] = MessageForSorting(message=None, replies=[])
+                    unknows.add((n, m.messageId))
+                messagesTree[m.rootMessageId].replies.append(m)
+            else:
+                if m.messageId not in messagesTree:
+                    messagesTree[m.messageId] = MessageForSorting(message=m, replies=[])
+                elif messagesTree[m.messageId].message == None:
+                    messagesTree[m.messageId].message = m
+                    unknows.discard((n, m.messageId))
+        for n, messageId in unknows:
+            if m := self._getOthersMessage(n, messageId):
+                messagesTree[messageId].message = m
+        with self._messagesLock:
+            self._messages = messagesTree
 
     def _sync(self) -> None:
         logger.info("_sync thread started.")
@@ -887,8 +961,8 @@ class GlobalApp:
             sleep(SyncIntervalSec.GLOBAL)
 
 
-    def start(self) -> None:
+    def start(self, runSync:bool=True) -> None:
         Thread(target=self._recv, daemon=True).start()
-        Thread(target=self._sync, daemon=True).start()
+        if runSync:
+            Thread(target=self._sync, daemon=True).start()
         self._gossiper.start()
-

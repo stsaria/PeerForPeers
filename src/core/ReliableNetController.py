@@ -19,7 +19,7 @@ from src.util.bytesCoverter import btoi, itob
 class ReliableRecvFailed(Exception):
     pass
 
-class ReliableNet:
+class ReliableNetController:
     def __init__(self, netObj:ExtendedNet, ed25519PrivateKey:Ed25519PrivateKey):
         self._net = netObj
         self._ed25519PrivateKey = ed25519PrivateKey
@@ -314,13 +314,16 @@ class ReliableNet:
 
     def recver(self) -> None:
         for data, addr in self._net.recv():
+            if len(data) < ReliablePacketElementSize.PACKET_FLAG+ReliablePacketElementSize.MODE_FLAG+ReliablePacketElementSize.SESSION_ID:
+                continue
             pFlag, mFlag, sid, mainData = bytesSplitter.split(
-                data,
+                data+b"\x00",
                 ReliablePacketElementSize.PACKET_FLAG,
                 ReliablePacketElementSize.MODE_FLAG,
                 ReliablePacketElementSize.SESSION_ID,
                 includeRest=True
             )
+            mainData = mainData[:-1]
             if btoi(pFlag, ENDIAN) != PacketFlag.RELIABLE.value:
                 continue
             try:

@@ -1,0 +1,5 @@
+cachetools==6.2.5
+cffi==2.0.0
+cryptography==46.0.3
+pycparser==3.0
+xxhash==3.6.0

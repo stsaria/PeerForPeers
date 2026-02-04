@@ -1,76 +1,66 @@
+import json
 import logging
 import random
 import statistics
-from threading import Lock, Thread
-from time import time
-from typing import Callable, Generator
+from threading import Condition, Event, Lock, Thread
+from time import sleep, time
+from typing import Generator
 
-from app.manager.Messages import Messages, MyReplyMessages, MyReplyMessageSqlType, MyMessageSqlType, OthersMessageSqlType
+from src.app.manager.Messages import Messages, MyReplyMessages, MyReplyMessageSqlType, MyMessageSqlType, OthersMessageSqlType
+from src.core.Gossiper import Gossiper
+from src.manager.CustomFuncs import CustomFunc, CustomFuncs
 from src.app.model.Message import MyMessage, OthersMessage, MyReplyMessage
-from manager.IpAndPortToEd25519PubKeys import IpToEd25519PubKeys
-from manager.ReliableSessionIds import ReliableSessionIds
-from manager.WaitingResponses import WaitingResponses
-from model.WaitingResponse import WAITING_RESPONSE_KEY, WaitingResponse
-from src.protocol.ProgramProtocol import TIME_OUT_MILLI_SEC, PING_WINDOW
+from src.manager.AddrToEd25519PubKeys import AddrToEd25519PubKeys
+from src.manager.ReliableSessionIds import ReliableSessionIds
+from src.manager.WaitingResponses import WaitingResponses
+from src.model.WaitingResponse import WAITING_RESPONSE_KEY, WaitingResponse
+from src.protocol.ProgramProtocol import SAVED_PATH, TIME_OUT_MILLI_SEC, PING_WINDOW
 from src.protocol.Protocol import *
 from src.app.model.Node import Node
-from app.protocol.Protocol import *
-from app.protocol.ProgramProtocol import *
+from src.app.protocol.Protocol import *
+from src.app.protocol.ProgramProtocol import *
 from src.protocol.Protocol import *
 from src.model.NodeIdentify import NodeIdentify
 from src.core.ExtendedNet import ExtendedNet
-from src.core.ReliableNetController import ReliableNet
+from src.core.ReliableNetController import ReliableNetController
 from src.core.SecureNet import SecureNet
 from src.model.NetConfig import SecureNetConfig
-from util import bytesSplitter, ed25519, encrypter
-from util.ed25519 import Ed25519PrivateKey
-from util.bytesCoverter import btoi, btos, itob, stob
+from src.util import bytesSplitter, ed25519
+from src.util.ed25519 import Ed25519PrivateKey
+from src.util.bytesCoverter import btoi, btos, itob, stob
+from src.util.gene import getGen
 
-logger = logging.getLogger()
-
-def genGen() -> Generator:
-    if False:
-        yield
+logger = logging.getLogger(__name__)
 
 class GlobalApp:
-    def __init__(self, netConfig:SecureNetConfig):
+    def __init__(self, netConfig:SecureNetConfig, ):
         self._ed25519PivKey:Ed25519PrivateKey = netConfig.ed25519PrivateKey
         self._extendedNet:ExtendedNet = ExtendedNet(netConfig)
         self._secureNet:SecureNet = SecureNet.getShareObj(self._extendedNet)
         self._secureNet.init(netConfig.ed25519PrivateKey)
-        self._reliableNet:ReliableNet = ReliableNet(self._extendedNet, netConfig.ed25519PrivateKey)
+        self._reliableNet:ReliableNetController = ReliableNetController(self._extendedNet, netConfig.ed25519PrivateKey)
+        self._gossiper:Gossiper = Gossiper(self._extendedNet, netConfig.ed25519PrivateKey)
+
+        self._friends:set[NodeIdentify] = set()
+        self._waitingFriends:set[NodeIdentify] = set()
+        self._reqFirends:set[NodeIdentify] = set()
+
+        self._friendsLock:Lock = Lock()
+
+        self._waitingOfflineFriendPubKeys:set[bytes] = set()
+        self._waitingOfflineFriendPubKeysLock:Lock = Lock()
+
+        self._ignoreReqFirends:bool = False
+        self._ignoreReqFirendsLock:Lock = Lock()
 
         self._ipAndPortToNodes:dict[tuple[str, int], Node] = {}
-        self._ipAndPortToNodesLock:Lock = Lock()
-
-        self._getIAmFunc:Callable[[], bytes] = lambda: b""
-        self._getSortedNodesFunc:Callable[[list[Node]], list[Node]] = lambda node: node
+        self._ipAndPortToNodesCond:Condition = Condition(Lock())
     
         logger.info("initialized.")
-
-    def _getFuncByCodeAndName(self, code:str, name:str) -> Callable:
-        ns = {}
-        exec(code, ns)
-        logger.debug(f"function {name} compiled from code.")
-        return ns[name]
-
-    def setGetIAmFunc(self, code:str) -> bool:
-        try:
-            self._getIAmFunc = self._getFuncByCodeAndName(code, GET_I_AM_FUNC_NAME)
-            logger.debug("getIAm function set successfully.")
-            return True
-        except Exception:
-            logger.error(f"Couldn't set getIAm function. code=\n{code}", exc_info=True)
-            return False
-
-    def setGetSortedNodesFunc(self, code:str) -> bool:
-        try:
-            self._getSortedNodesFunc = self._getFuncByCodeAndName(code, GET_SORTED_NODES_FUNC_NAME)
-            logger.debug("getSortedNodes function set successfully.")
-            return True
-        except Exception:
-            logger.error(f"Couldn't set getSortedNodes function. code=\n{code}", exc_info=True)
-            return False
+    
+    def setIgnoreReqFriends(self, ignore:bool) -> None:
+        with self._ignoreReqFirendsLock:
+            self._ignoreReqFirends = ignore
 
     def hello(self, nodeIdentify:NodeIdentify) -> bool:
         logger.debug(f"{nodeIdentify.port}")
@@ -89,7 +79,7 @@ class GlobalApp:
         self._secureNet.sendToSecure(
             AppFlag.GLOBAL
             +AppModeFlag.HELLO
-            +self._getIAmFunc(),
+            +CustomFuncs.get(CustomFunc.GET_I_AM)(),
             nodeIdentify
         )
         if r := WaitingResponses.waitAndGet(waitingResponse, TIME_OUT_MILLI_SEC) == None:
@@ -97,7 +87,7 @@ class GlobalApp:
             logger.error(f"{nodeIdentify.port} failed (no response)")
             return False
         WaitingResponses.delete(waitingResponse)
-        with self._ipAndPortToNodesLock:
+        with self._ipAndPortToNodesCond:
             self._ipAndPortToNodes[(nodeIdentify.ip, nodeIdentify.port)] = Node(
                 ip=nodeIdentify.ip,
                 port=nodeIdentify.port,
@@ -108,16 +98,167 @@ class GlobalApp:
             )
         logger.debug(f"{nodeIdentify.port} succeeded")
         return True
-
-    def _getNodesSyncronized(self, nodeIdentify:NodeIdentify, limit:int) -> list[NodeIdentify]:
-        logger.debug(f"{nodeIdentify.port}")
+    
+    def _waitRespFriend(self, waitingResponse:WaitingResponse, stop:Event) -> None:
+        with self._friendsLock:
+            self._waitingFriends.add(waitingResponse.nodeIdentify)
+        if WaitingResponses.waitAndGet(waitingResponse, TIME_OUT_MILLI_SEC, stop) == None:
+            WaitingResponses.delete(waitingResponse)
+            logger.warning(f"failed to add friend {waitingResponse.nodeIdentify.port}")
+            with self._friendsLock:
+                self._waitingFriends.remove(waitingResponse.nodeIdentify)
+            return
+        WaitingResponses.delete(waitingResponse)
+        logger.debug(f"successfully added friend {waitingResponse.nodeIdentify.port}")
+        self._secureNet.sendToSecure(
+            AppFlag.GLOBAL
+            +AppModeFlag.SECOND_RESP_FRIEND,
+            waitingResponse.nodeIdentify
+        )
+        with self._friendsLock:
+            self._waitingFriends.remove(waitingResponse.nodeIdentify)
+            self._friends.add(waitingResponse.nodeIdentify)
+            with open(SAVED_PATH+FRIENDS_PUBKEYS_FILE, "w") as f:
+                f.write(json.dumps(list(self._friends)))
+        
+    def addFriend(self, nodeIdentify:NodeIdentify) -> bool:
+        with self._friendsLock:
+            if len(self._friends)+len(self._waitingFriends) >= MAX_FIRENDS:
+                logger.warning(f"too many friend adding processes ongoing.")
+                return False
         waitingResponse = WaitingResponse(
             nodeIdentify,
             self,
-            AppModeFlag.RESP_GET_NODES
+            AppModeFlag.RESP_FRIEND
         )
         WaitingResponses.addKey(waitingResponse)
+        self._secureNet.sendToSecure(
+            AppFlag.GLOBAL
+            +AppModeFlag.REQ_FRIEND,
+            nodeIdentify
+        )
+        Thread(target=self._waitRespFriend, args=(waitingResponse, None), daemon=True).start()
+        return True
+    
+    def getFirends(self) -> list[NodeIdentify]:
+        with self._friendsLock:
+            return list(self._friends)
+    
+    def getOnlineFriends(self) -> list[NodeIdentify]:
+        friends = self.getFirends()
+        onlineFriends:list[NodeIdentify] = []
+        with self._ipAndPortToNodesCond:
+            nodes = self._ipAndPortToNodes.values()
+        for n in nodes:
+            if (n := NodeIdentify(
+                ip=n.ip,
+                port=n.port,
+                ed25519PublicKey=n.ed25519PublicKey
+            )) in friends:
+                onlineFriends.append(n)
+        return onlineFriends
+    
+    def getWaitingFriends(self) -> list[NodeIdentify]:
+        with self._friendsLock:
+            return list(self._waitingFriends)
+    
+    def getReqFriends(self) -> list[NodeIdentify]:
+        with self._friendsLock:
+            return list(self._reqFirends)
+    
+    def acceptReqFriend(self, nodeIdentify:NodeIdentify) -> bool:
+        with self._friendsLock:
+            if nodeIdentify not in self._reqFirends:
+                logger.warning(f"no friend request from {nodeIdentify.port}")
+                return False
+            self._reqFirends.remove(nodeIdentify)
+        WaitingResponse = WaitingResponse(
+            nodeIdentify,
+            self,
+            AppModeFlag.SECOND_RESP_FRIEND
+        )
+        WaitingResponses.addKey(WaitingResponse)
+        self._secureNet.sendToSecure(
+            AppFlag.GLOBAL
+            +AppModeFlag.RESP_FRIEND,
+            nodeIdentify
+        )
+        if WaitingResponses.waitAndGet(WaitingResponse, TIME_OUT_MILLI_SEC) == None:
+            WaitingResponses.delete(WaitingResponse)
+            return False
+        WaitingResponses.delete(WaitingResponse)
+        with self._friendsLock:
+            self._friends.add(nodeIdentify)
+            with open(SAVED_PATH+FRIENDS_PUBKEYS_FILE, "w") as f:
+                f.write(json.dumps(list(self._friends)))
+        logger.debug(f"accepted friend request from {nodeIdentify.port}")
+        return True
+    
+    def checkAmIFirend(self, nodeIdentify:NodeIdentify) -> bool:
+        with self._friendsLock:
+            if not nodeIdentify in self._friends:
+                return False
+        waitingResponse = WaitingResponse(
+            nodeIdentify,
+            self,
+            AppModeFlag.RESP_AM_I_FRIEND
+        )
+        WaitingResponses.addKey(waitingResponse)
+        self._secureNet.sendToSecure(
+            AppFlag.GLOBAL
+            +AppModeFlag.AM_I_FRIEND,
+            nodeIdentify
+        )
+        if WaitingResponses.waitAndGet(waitingResponse, TIME_OUT_MILLI_SEC) == None:
+            WaitingResponses.delete(waitingResponse)
+            return False
+        WaitingResponses.delete(waitingResponse)
+        return True
+    
+    def removeFriend(self, nodeIdentify:NodeIdentify) -> None:
+        with self._friendsLock:
+            if nodeIdentify in self._friends:
+                self._friends.remove(nodeIdentify)
+                with open(SAVED_PATH+FRIENDS_PUBKEYS_FILE, "w") as f:
+                    f.write(json.dumps(list(self._friends)))
+    
+    def _waitAndAddFriendNode(self, pubKey:bytes) -> None:
+        nI = self._gossiper.waitAndGetNodeByPublicKey(pubKey, None)
+        if not self.hello(nI):
+            logger.warning(f"failed to add friend node {nI.port}")
+            return
+        if not self.checkAmIFirend(nI):
+            logger.warning(f"not a friend node {nI.port}")
+            return
+        logger.debug(f"friend node {nI.port} added.")
+    
+    def _syncFirends(self) -> None:
+        waitNodePubKeyAndEvents:dict[bytes, Event] = {}
+        with self._ipAndPortToNodesCond:
+            while True:
+                if self._ipAndPortToNodesCond.wait(None):
+                    with self._friendsLock:
+                        friends = list(self._friends)
+                    for f in friends:
+                        if (f.ip, f.port) in self._ipAndPortToNodes.keys() or f.ed25519PublicKey.public_bytes_raw() in waitNodePubKeyAndEvents.keys():
+                            continue
+                        waitNodePubKeyAndEvents[f.ed25519PublicKey.public_bytes_raw()] = Event()
+                        Thread(target=self._waitAndAddFriendNode, args=(f.ed25519PublicKey.public_bytes_raw(),), daemon=True).start()
+                with self._friendsLock:
+                    friendPubKeys = [f.ed25519PublicKey.public_bytes_raw() for f in self._friends]
+                    for k, e in waitNodePubKeyAndEvents.items():
+                        if not k in friendPubKeys:
+                            e.set()
+
+    def _getNodesSyncronized(self, nodeIdentify:NodeIdentify, limit:int) -> list[NodeIdentify]:
         sid = ReliableSessionIds.issueTicket()
+        waitingResponse = WaitingResponse(
+            nodeIdentify,
+            self,
+            AppModeFlag.RESP_GET_NODES,
+            otherInfoInKey=sid
+        )
+        WaitingResponses.addKey(waitingResponse)
         self._secureNet.sendToSecure(
             AppFlag.GLOBAL
             +AppModeFlag.GET_NODES
@@ -132,7 +273,7 @@ class GlobalApp:
         WaitingResponses.delete(waitingResponse)
         size = r
         if size > (
-            GlobalAppElementSize.IP_STR
+            GlobalAppElementSize.IP
             +GlobalAppElementSize.PORT
             +GlobalAppElementSize.ED25519_PUBLIC_KEY
         ) * limit:
@@ -155,13 +296,13 @@ class GlobalApp:
         for data in gen:
             cache += data
             while len(cache) >= (
-                GlobalAppElementSize.IP_STR
+                GlobalAppElementSize.IP
                 +GlobalAppElementSize.PORT
                 +GlobalAppElementSize.ED25519_PUBLIC_KEY
             ):
                 ipStrB, portB, ed25519PubKeyB, cache = bytesSplitter.split(
                     cache,
-                    GlobalAppElementSize.IP_STR,
+                    GlobalAppElementSize.IP,
                     GlobalAppElementSize.PORT,
                     GlobalAppElementSize.ED25519_PUBLIC_KEY,
                     includeRest=True
@@ -342,25 +483,23 @@ class GlobalApp:
 
     def _recvHello(self, mD:bytes, addr:tuple[str, int]) -> None:
         logger.debug(f"_recvHello from {addr}")
-        with self._ipAndPortToNodesLock:
-            if not self._ipAndPortToNodes.get(addr):
-                logger.warning(f"node {addr} not found in ipAndPortToNodes.")
-                return
         iAmInfo = mD
-        if (ed25519PubKey := IpToEd25519PubKeys.get(addr[0])) == None:
-            logger.warning(f"ed25519PubKey not found for {addr[0]}")
+        if (ed25519PubKey := AddrToEd25519PubKeys.get(addr[0])) == None:
             return
+        with self._ipAndPortToNodesCond:
+            if addr in self._ipAndPortToNodes.keys():
+                return
         self._secureNet.sendToSecure(
             AppFlag.GLOBAL
-            +AppModeFlag.HELLO
-            +self._getIAmFunc(),
+            +AppModeFlag.RESP_HELLO
+            +CustomFuncs.get(CustomFunc.GET_I_AM)(),
             (nI := NodeIdentify(
                 ip=addr[0],
                 port=addr[1],
                 ed25519PublicKey=ed25519PubKey
             ))
         )
-        with self._ipAndPortToNodesLock:
+        with self._ipAndPortToNodesCond:
             self._ipAndPortToNodes[addr] = Node(
                 ip=addr[0],
                 port=addr[1],
@@ -369,6 +508,7 @@ class GlobalApp:
                 iAmInfo=iAmInfo,
                 startTimestamp=time()
             )
+        
         logger.debug(f"node {addr} updated.")
 
     def _recvGetNodes(self, mD:bytes, addr:tuple[str, int]) -> None:
@@ -382,7 +522,7 @@ class GlobalApp:
         if limit > NODES_LIMIT_FOR_GET:
             logger.warning(f"limit {limit} exceeds NODES_LIMIT_FOR_GET.")
             return
-        if not (ed25519PubKey := IpToEd25519PubKeys.get(addr[0])):
+        if not (ed25519PubKey := AddrToEd25519PubKeys.get(addr[0])):
             logger.warning(f"ed25519PubKey not found for {addr[0]}")
             return
         nI = NodeIdentify(
@@ -398,7 +538,7 @@ class GlobalApp:
         )
         WaitingResponses.addKey(waitingResponse)
 
-        with self._ipAndPortToNodesLock:
+        with self._ipAndPortToNodesCond:
             sendAddrs = random.sample(
                 list(self._ipAndPortToNodes.keys()),
                 min(limit, len(self._ipAndPortToNodes))
@@ -408,7 +548,7 @@ class GlobalApp:
             if sendAddr == addr:
                 continue
             d += (
-                stob(sendAddr[0], GlobalAppElementSize.IP_STR, STR_ENCODING)
+                stob(sendAddr[0], GlobalAppElementSize.IP, STR_ENCODING)
                 +itob(sendAddr[1], GlobalAppElementSize.PORT, ENDIAN)
                 +self._ipAndPortToNodes[sendAddr].ed25519PublicKey.public_bytes_raw()
                 +self._ipAndPortToNodes[sendAddr].iAmInfo
@@ -426,7 +566,7 @@ class GlobalApp:
             logger.warning(f"no start send response from {addr}")
             return
         WaitingResponses.delete(waitingResponse)
-        gen:Generator = genGen()
+        gen:Generator = getGen()
         gen.send(d)
         self._reliableNet.send(
             nI,
@@ -438,15 +578,16 @@ class GlobalApp:
 
     def _recvRespGetNodes(self, mD:bytes, addr:tuple[str, int]) -> None:
         logger.debug(f"from {addr}")
-        sid = bytesSplitter.split(
+        sid, size = bytesSplitter.split(
             mD,
-            ReliablePacketElementSize.SESSION_ID
+            ReliablePacketElementSize.SESSION_ID,
+            GlobalAppElementSize.NODES_SIZE
         )[0]
         key:WAITING_RESPONSE_KEY = (addr[0], addr[1], self, AppModeFlag.RESP_GET_NODES, sid)
         if not WaitingResponses.containsKey(key):
             logger.warning(f"WaitingResponses does not contain key for {addr}")
             return
-        WaitingResponses.updateValue(key, mD)
+        WaitingResponses.updateValue(key, size)
 
     def _recvGetMessages(self, mD:bytes, addr:tuple[str, int]) -> None:
         logger.debug(f"_recvGetMessages from {addr}")
@@ -459,7 +600,7 @@ class GlobalApp:
         if limit > MESSAGES_LIMIT_FOR_GET:
             logger.warning(f"limit {limit} exceeds MESSAGES_LIMIT_FOR_GET.")
             return
-        if not (ed25519PubKey := IpToEd25519PubKeys.get(addr[0])):
+        if not (ed25519PubKey := AddrToEd25519PubKeys.get(addr[0])):
             logger.warning(f"ed25519PubKey not found for {addr[0]}")
             return
         nI = NodeIdentify(
@@ -486,7 +627,7 @@ class GlobalApp:
             messageTypeB = itob((MessageType.REPLY_MESSAGE if isinstance(message, MyReplyMessage) else MessageType.MESSAGE).value, GlobalAppElementSize.MESSAGE_TYPE, ENDIAN)
             messageId = message.messageId
             timestampB = itob(message.timestamp, GlobalAppElementSize.TIMESTAMP, ENDIAN)
-            messageContentB = stob(message.content, STR_ENCODING)
+            messageContentB = stob(message.content, 0, STR_ENCODING)
             messageSizeB = itob(len(messageContentB), GlobalAppElementSize.MESSAGE_SIZE, ENDIAN)
             if isinstance(message, MyReplyMessage):
                 rootMessageId = message.rootMessageId
@@ -518,7 +659,7 @@ class GlobalApp:
             logger.warning(f"no start send response from {addr}")
             return
         WaitingResponses.delete(waitingResponse)
-        gen:Generator = genGen()
+        gen:Generator = getGen()
         gen.send(d)
         self._reliableNet.send(
             nI,
@@ -546,7 +687,7 @@ class GlobalApp:
             mD,
             GlobalAppElementSize.MESSAGE_ID
         )[0]
-        if not (ed25519PubKey := IpToEd25519PubKeys.get(addr[0])):
+        if not (ed25519PubKey := AddrToEd25519PubKeys.get(addr[0])):
             logger.warning(f"ed25519PubKey not found for {addr[0]}")
             return
         nI = NodeIdentify(
@@ -560,7 +701,7 @@ class GlobalApp:
             return
         ed25519PubKey = message[0]
         messageId = message[1]
-        messegeContentB = stob(message[2], STR_ENCODING)
+        messegeContentB = stob(message[2], 0, STR_ENCODING)
         timestampB = itob(message[3], GlobalAppElementSize.TIMESTAMP, ENDIAN)
         signed = message[4]
         self._secureNet.sendToSecure(
@@ -608,38 +749,82 @@ class GlobalApp:
         WaitingResponses.updateValue(key, mD)
 
     def _recvRespHello(self, mD:bytes, addr:tuple[str, int]) -> None:
-        logger.debug(f"_recvRespHello from {addr}")
         key:WAITING_RESPONSE_KEY = (addr[0], addr[1], self, AppModeFlag.RESP_HELLO)
         if not WaitingResponses.containsKey(key):
             logger.warning(f"WaitingResponses does not contain key for {addr}")
             return
         WaitingResponses.updateValue(key, mD)
     
-
-
+    def _recvReqFriend(self, addr:tuple[str, int]) -> None:
+        with self._ignoreReqFirendsLock:
+            if self._ignoreReqFirends:
+                logger.debug(f"ignoring req friend from {addr}")
+                return
+        nI = NodeIdentify(
+            ip=addr[0],
+            port=addr[1],
+            ed25519PublicKey=AddrToEd25519PubKeys.get(addr)
+        )
+        with self._friendsLock:
+            self._reqFirends.add(nI)
+    
+    def _recvRespFriend(self, addr:tuple[str, int]) -> None:
+        key:WAITING_RESPONSE_KEY = (addr[0], addr[1], self, AppModeFlag.RESP_FRIEND)
+        if not WaitingResponses.containsKey(key):
+            return
+        WaitingResponses.updateValue(key, 1)
+    
+    def _recvSecondRespFriend(self, addr:tuple[str, int]) -> None:
+        key:WAITING_RESPONSE_KEY = (addr[0], addr[1], self, AppModeFlag.SECOND_RESP_FRIEND)
+        if not WaitingResponses.containsKey(key):
+            return
+        WaitingResponses.updateValue(key, 1)
+    
+    def _recvAmIFirend(self, addr:tuple[str, int]) -> None:
+        nI = NodeIdentify(
+            ip=addr[0],
+            port=addr[1],
+            ed25519PublicKey=AddrToEd25519PubKeys.get(addr)
+        )
+        with self._friendsLock:
+            if not nI in self._friends:
+                return
+        self._secureNet.sendToSecure(
+            AppFlag.GLOBAL
+            +AppModeFlag.RESP_AM_I_FRIEND,
+            nI
+        )
+    
+    def _recvRespAmIFirend(self, addr:tuple[str, int]) -> None:
+        key:WAITING_RESPONSE_KEY = (addr[0], addr[1], self, AppModeFlag.RESP_AM_I_FRIEND)
+        if not WaitingResponses.containsKey(key):
+            return
+        WaitingResponses.updateValue(key, 1)
+        
     def _recv(self) -> None:
         logger.info("thread started.")
         for data, addr in self._secureNet.recv():
-            pFlag, mFlag, mainData = bytesSplitter.split(
-                data,
+            if len(data) < GlobalAppElementSize.APP_FLAG+GlobalAppElementSize.MODE_FLAG:
+                continue
+            aFlag, mFlag, mainData = bytesSplitter.split(
+                data+b"\x00",
                 GlobalAppElementSize.APP_FLAG,
                 GlobalAppElementSize.MODE_FLAG,
                 includeRest=True
             )
-            if btoi(pFlag, ENDIAN) != AppFlag.GLOBAL.value:
-                logger.debug(f"ignored packet from {addr} (not GLOBAL flag)")
+            mainData = mainData[:-1]
+            if btoi(aFlag, ENDIAN) != AppFlag.GLOBAL.value:
                 continue
             try:
                 mFlag = AppModeFlag(btoi(mFlag, ENDIAN))
             except ValueError:
-                logger.warning(f"invalid mode flag from {addr}")
                 continue
             if mFlag == AppModeFlag.HELLO:
                 target, args = self._recvHello, (mainData, addr)
             elif mFlag == AppModeFlag.RESP_HELLO:
                 target, args = self._recvRespHello, (mainData, addr)
             
-            with self._ipAndPortToNodesLock:
+            with self._ipAndPortToNodesCond:
                 contains = addr in self._ipAndPortToNodes
             if contains:
                 match mFlag:
@@ -657,39 +842,53 @@ class GlobalApp:
                         target, args = self._recvRespGetOtherMessage, (mainData, addr)
                     case AppModeFlag.START_SEND_REQ:
                         target, args = self._recvStartSendReq, (mainData, addr)
+                    case AppModeFlag.REQ_FRIEND:
+                        if not self._ignoreReqFirends:
+                            target, args = self._recvReqFriend, (addr,)
+                    case AppModeFlag.RESP_FRIEND:
+                        target, args = self._recvRespFriend, (addr,)
+                    case AppModeFlag.SECOND_RESP_FRIEND:
+                        target, args = self._recvSecondRespFriend, (addr,)
+                    case AppModeFlag.AM_I_FRIEND:
+                        target, args = self._recvAmIFirend, (addr,)
+                    case AppModeFlag.RESP_AM_I_FRIEND:
+                        target, args = self._recvRespAmIFirend, (addr,)
             Thread(target=target, args=args, daemon=True).start()
+
+    def sync(self) -> None:
+        with self._ipAndPortToNodesCond and self._friendsLock:
+            sortedNodes:list[Node] = CustomFuncs.get(CustomFunc.GET_SORTED_NODES)(list(self._ipAndPortToNodes.values()), list(self._friends))
+            if len(sortedNodes) > MAX_NODES:
+                for n in sortedNodes[MAX_NODES-MAX_NODES_MARGIN:]:
+                    sortedNodes.remove(n)
+            self._ipAndPortToNodes.clear()
+            for n in sortedNodes:
+                self._ipAndPortToNodes[(n.ip, n.port)] = n
+                self._ipAndPortToNodesCond.notify_all()
+                if len(self._ipAndPortToNodes) < MAX_NODES-MAX_NODES_MARGIN:
+                    for nI in self._getNodesSyncronized(
+                        n,
+                        min(NODES_LIMIT_FOR_GET, MAX_NODES-len(self._ipAndPortToNodes))
+                    ):
+                        if not self._ipAndPortToNodes.get((nI.ip, nI.port)):
+                            self.hello(nI)
+            sortedNodes = CustomFuncs.get(CustomFunc.GET_SORTED_NODES)(list(self._ipAndPortToNodes.values()))
+        messages = []
+        for n in sortedNodes:
+            if len(messages) >= MESSAGES_LIMIT_FOR_GET:
+                break
+            if m := self._getMessages(n, min(MESSAGES_LIMIT_FOR_GET - len(messages), MESSAGES_LIMIT_FOR_GET)):
+                messages.extend(m)
 
     def _sync(self) -> None:
         logger.info("_sync thread started.")
         while True:
-            with self._ipAndPortToNodesLock:
-                sortedNodes = self._getSortedNodesFunc(list(self._ipAndPortToNodes.values()))
-                e = False
-                if len(sortedNodes) > MAX_NODES-MAX_NODES_MARGIN:
-                    for n in sortedNodes[MAX_NODES-MAX_NODES_MARGIN:]:
-                        sortedNodes.remove(n)
-                    e = True
-                self._ipAndPortToNodes.clear()
-                for n in sortedNodes:
-                    self._ipAndPortToNodes[(n.ip, n.port)] = n
-                    if len(self._ipAndPortToNodes) < MAX_NODES-MAX_NODES_MARGIN:
-                        for nI in self._getNodesSyncronized(
-                            n,
-                            min(NODES_LIMIT_FOR_GET, MAX_NODES-len(self._ipAndPortToNodes))
-                        ):
-                            if not self._ipAndPortToNodes.get((nI.ip, nI.port)):
-                                self.hello(nI)
-                sortedNodes = self._getSortedNodesFunc(list(self._ipAndPortToNodes.values()))
-            messages = []
-            for n in sortedNodes:
-                if len(messages) >= MESSAGES_LIMIT_FOR_GET:
-                    break
-                if m := self._getMessages(n, min(MESSAGES_LIMIT_FOR_GET - len(messages), MESSAGES_LIMIT_FOR_GET)):
-                    messages.extend(m)
-            logger.debug(f"collected {len(messages)} messages in this sync loop.")
+            self.sync(self)
+            sleep(SyncIntervalSec.GLOBAL)
 
 
     def start(self) -> None:
         Thread(target=self._recv, daemon=True).start()
         Thread(target=self._sync, daemon=True).start()
+        self._gossiper.start()
 

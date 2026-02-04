@@ -1,14 +1,15 @@
+import random
 from typing import Generator
 from threading import Lock, Thread
 
-from manager.IpAndPortToEd25519PubKeys import IpToEd25519PubKeys
+from manager.AddrToEd25519PubKeys import AddrToEd25519PubKeys
 from src.model.EncryptCollection import EncryptCollection
 from src.model.NodeIdentify import NodeIdentify
 from src.manager.WaitingResponses import WaitingResponses
 from src.model.WaitingResponse import WaitingResponse, WAITING_RESPONSE_KEY
 from src.core.ExtendedNet import ExtendedNet
 from src.util.ed25519 import Ed25519PrivateKey
-from src.util.bytesCoverter import itob, btoi
+from src.util.bytesCoverter import *
 from src.util import bytesSplitter, ed25519, encrypter
 from src.protocol.Protocol import *
 from src.protocol.ProgramProtocol import *
@@ -26,6 +27,30 @@ class SecureNet(ExtendedNet):
         self._sendCountsLock:Lock = Lock()
 
         self._recvCounts:dict[tuple[str, int], int] = {}
+    def agencyPing(self, nodeIdentifyToPing:NodeIdentify) -> bool:
+        sid = os.urandom(ANY_SESSION_ID_SIZE)
+        waitingResponse = WaitingResponse(
+            nodeIdentify=nodeIdentifyToPing,
+            waitingInst=self,
+            waitingType=PacketModeFlag.MAIN_DATA,
+            otherInfoInKey=sid
+        )
+        WaitingResponses.addKey(waitingResponse)
+        with self._sendCountsLock:
+            nodeIdentifyToAgency = random.choice(list(self._sendCounts.keys()))
+        self.sendToSecure(
+            itob(PacketFlag.SECURE, SecurePacketElementSize.PACKET_FLAG)
+            +itob(PacketModeFlag.PING, SecurePacketElementSize.MODE_FLAG)
+            +sid
+            +stob(nodeIdentifyToPing.ip, SecurePacketElementSize.IP, STR_ENCODING)
+            +itob(nodeIdentifyToPing.port, SecurePacketElementSize.PORT, ENDIAN),
+            nodeIdentifyToAgency
+        )
+        if WaitingResponses.waitAndGet(waitingResponse, TIME_OUT_MILLI_SEC*2) == None:
+            WaitingResponses.delete(waitingResponse)
+            return False
+        WaitingResponses.delete(waitingResponse)
+        return True
     def hello(self, nodeIdentify:NodeIdentify) -> bool:
         waitingResponse = WaitingResponse(
             nodeIdentify=nodeIdentify,
@@ -47,7 +72,7 @@ class SecureNet(ExtendedNet):
             WaitingResponses.delete(waitingResponse)
             return False
         WaitingResponses.delete(waitingResponse)
-        if not IpToEd25519PubKeys.put((nodeIdentify.ip, nodeIdentify.port), nodeIdentify.ed25519PublicKey):
+        if not AddrToEd25519PubKeys.put((nodeIdentify.ip, nodeIdentify.port), nodeIdentify.ed25519PublicKey):
             return False
         e = EncryptCollection(
             salt=r[2],
@@ -96,6 +121,9 @@ class SecureNet(ExtendedNet):
 
     
     def _recvHello(self, mD:bytes, addr:tuple[str, int]) -> None:
+        with self._encryptCollectionsLock:
+            if addr in self._encryptCollections.keys():
+                return
         sid, ed25519PubKeyB = bytesSplitter.split(
             mD,
             ANY_SESSION_ID_SIZE,
@@ -134,11 +162,13 @@ class SecureNet(ExtendedNet):
             WaitingResponses.delete(waitingResponse)
             return
         WaitingResponses.delete(waitingResponse)
-        if not IpToEd25519PubKeys.put(addr, waitingResponse.nodeIdentify.ed25519PublicKey):
+        if not AddrToEd25519PubKeys.put(addr, waitingResponse.nodeIdentify.ed25519PublicKey):
             return
         e.otherPartyX25519PubKey = encrypter.getX25519PubKeyByPubKeyBytes(r)
         e.deriveSharedSecretByX25519(X25519DeriveInfoBase.SECURE)
         e.deriveAesKey(X25519AndAesKeyInfoBase.SECURE)
+        if not self.agencyPing(waitingResponse.nodeIdentify):
+            return
         with self._encryptCollectionsLock:
             self._encryptCollections[*addr] = e
     def _recvMainDataSynchronized(self, mD:bytes, addr:tuple[str, int]) -> bytes:
@@ -198,14 +228,55 @@ class SecureNet(ExtendedNet):
         if not ed25519.verify(wR.otherInfo+x25519PubKeyB, signedB, wR.nodeIdentify.ed25519PublicKey):
             return
         WaitingResponses.updateValue(key, x25519PubKeyB)
+    def _recvAgencyPing(self, mD:bytes, addr:tuple[str, int]) -> None:
+        if (ed25519PubKey := AddrToEd25519PubKeys.get(addr)) == None:
+            return
+        sid, ipB, portB = bytesSplitter.split(
+            mD,
+            ANY_SESSION_ID_SIZE,
+            SecurePacketElementSize.IP,
+            SecurePacketElementSize.PORT
+        )
+        status = False
+        for _ in range(PING_WINDOW):
+            if self.ping((btos(ipB, STR_ENCODING), btoi(portB, ENDIAN))) != None:
+                status = True
+                break
+        self.sendToSecure(
+            itob(PacketFlag.SECURE, SecurePacketElementSize.PACKET_FLAG)
+            +itob(PacketModeFlag.RESP_AGENCY_PING, SecurePacketElementSize.MODE_FLAG)
+            +(signData := (
+                sid
+                +bytes(status)
+            ))
+            +ed25519.sign(signData, self._ed25519PivKey),
+            NodeIdentify(ip=addr[0], port=addr[1], ed25519PublicKey=ed25519PubKey)
+        )
+    def _recvRespAgencyPing(self, mD:bytes, addr:tuple[str, int]) -> None:
+        sid, statusB, signedB = bytesSplitter.split(
+            mD,
+            ANY_SESSION_ID_SIZE,
+            SecurePacketElementSize.IS_SUCCESS_AGENCY_PING,
+            SecurePacketElementSize.ED25519_SIGN
+        )
+        key:WAITING_RESPONSE_KEY = (addr[0], addr[1], self, PacketModeFlag.RESP_AGENCY_PING, sid)
+        if not WaitingResponses.containsKey(key):
+            return
+        wR = WaitingResponses.getWaitingResponseObjByKey(key)
+        if not ed25519.verify(sid+statusB, signedB, wR.nodeIdentify.ed25519PublicKey):
+            return
+        WaitingResponses.updateValue(key, bool(btoi(statusB, ENDIAN)))
     def recv(self) -> Generator[tuple[bytes, tuple[str, int]], None, None]:
         for data, addr in super().recv():
+            if len(data) < SecurePacketElementSize.PACKET_FLAG+SecurePacketElementSize.MODE_FLAG:
+                continue
             pFlag, mFlag, mainData = bytesSplitter.split(
-                data,
+                data+b"\x00",
                 SecurePacketElementSize.PACKET_FLAG,
                 SecurePacketElementSize.MODE_FLAG,
                 includeRest=True
             )
+            mainData = mainData[:-1]
             if btoi(pFlag, ENDIAN) != PacketFlag.SECURE.value:
                 continue
             try:
@@ -223,9 +294,11 @@ class SecureNet(ExtendedNet):
                 case PacketModeFlag.RESP_HELLO:
                     target, args = self._recvRespHello, (mainData, addr)     
                 case PacketModeFlag.SECOND_HELLO:
-                    target, args = self._recvSecondHello, (mainData, addr)    
-                case PacketModeFlag.PONG:
-                    target, args = self._recvPong, (mainData[ANY_SESSION_ID_SIZE:], addr)
+                    target, args = self._recvSecondHello, (mainData, addr)
+                case PacketModeFlag.AGENCY_PING:
+                    target, args = self._recvAgencyPing, (mainData, addr)
+                case PacketModeFlag.RESP_AGENCY_PING:
+                    target, args = self._recvRespAgencyPing, (mainData, addr)
                 case _:
                     continue
 

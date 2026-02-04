@@ -4,8 +4,8 @@ from threading import Lock, Thread
 from src.model.EncryptCollection import PrivateEncryptCollection
 from src.model.NodeIdentify import NodeIdentify
 from src.manager.WaitingResponses import WaitingResponses
-from manager.IpAndPortToEd25519PubKeys import IpToEd25519PubKeys
-from src.model.WaitingResponse import WaitingResponse
+from manager.AddrToEd25519PubKeys import AddrToEd25519PubKeys
+from src.model.WaitingResponse import WAITING_RESPONSE_KEY, WaitingResponse
 from src.core.ExtendedNet import ExtendedNet
 from src.util.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
 from src.util.bytesCoverter import itob, btoi
@@ -55,7 +55,7 @@ class PrivateSecureNet(ExtendedNet):
         WaitingResponses.delete(waitingResponse)
         e = PrivateEncryptCollection(
             sharedSecret=self._sharedSecret,
-            salt=r[2]
+            salt=r[1]
         )
         nextSessionId = r[0]
         self.sendTo(
@@ -67,7 +67,7 @@ class PrivateSecureNet(ExtendedNet):
             ),
             nodeIdentify
         )
-        if not IpToEd25519PubKeys.put((nodeIdentify.ip, nodeIdentify.port), nodeIdentify.ed25519PublicKey):
+        if not AddrToEd25519PubKeys.put((nodeIdentify.ip, nodeIdentify.port), nodeIdentify.ed25519PublicKey):
             return False
         e.deriveAesKey(AesKeyInfoBase.PRIVATE_SECURE.format(pubKeyRaw).encode(STR_ENCODING))
         with self._encryptCollectionsLock:
@@ -118,7 +118,6 @@ class PrivateSecureNet(ExtendedNet):
         )
         signEndPart = (
             nextSid
-            +self._myEd25519PivKey.public_key().public_bytes_raw()
             +encryptCollection.salt
         )
         self.sendTo(
@@ -134,7 +133,7 @@ class PrivateSecureNet(ExtendedNet):
             WaitingResponses.delete(waitingResponse)
             return
         WaitingResponses.delete(waitingResponse)
-        if not IpToEd25519PubKeys.put(addr, ed25519.getPubKeyByPubKeyBytes(ed25519PubKeyB)):
+        if not AddrToEd25519PubKeys.put(addr, ed25519.getPubKeyByPubKeyBytes(ed25519PubKeyB)):
             return
         encryptCollection.deriveAesKey(AesKeyInfoBase.PRIVATE_SECURE.format(ed25519PubKeyB).encode(STR_ENCODING))
         with self._encryptCollectionsLock:
@@ -160,10 +159,50 @@ class PrivateSecureNet(ExtendedNet):
         if mainDecryptedData != None:
             self._recvCounts[addr] = self._recvCounts.get(addr, 0)+1
         return mainDecryptedData
+    def _recvRespHello(self, mD:bytes, addr:tuple[str, int]) -> None:
+        nextSid, salt, signedByOtherPartyPivKey, signedBySharedPivKey = bytesSplitter.split(
+            mD,
+            ANY_SESSION_ID_SIZE,
+            PrivateSecurePacketElementSize.AES_SALT,
+            SecurePacketElementSize.ED25519_SIGN,
+            SecurePacketElementSize.ED25519_SIGN
+        )
+        key:WAITING_RESPONSE_KEY = (addr[0], addr[1], PacketModeFlag.RESP_HELLO)
+        if not WaitingResponses.containsKey(key):
+            return
+        wR:WaitingResponse = WaitingResponses.get(key)
+        signData = (
+            wR.otherInfo
+            +nextSid
+            +salt
+        )
+        if not ed25519.verify(signedByOtherPartyPivKey, signData, wR.nodeIdentify.ed25519PublicKey):
+            return
+        elif not ed25519.verify(signedBySharedPivKey, signData, self._sharedEd25519PivKey.public_key()):
+            return
+        WaitingResponses.updateValue(key, (nextSid, salt))
+    def _recvSecondHello(self, mD:bytes, addr:tuple[str, int]) -> None:
+        signedByOtherPartyPivKey, signedBySharedPivKey = bytesSplitter.split(
+            mD,
+            SecurePacketElementSize.ED25519_SIGN,
+            SecurePacketElementSize.ED25519_SIGN
+        )
+        key:WAITING_RESPONSE_KEY = (addr[0], addr[1], PacketModeFlag.SECOND_HELLO)
+        if not WaitingResponses.containsKey(key):
+            return
+        wR:WaitingResponse = WaitingResponses.get(key)
+        signData = wR.otherInfo
+        if not ed25519.verify(signedByOtherPartyPivKey, signData, wR.nodeIdentify.ed25519PublicKey):
+            return
+        elif not ed25519.verify(signedBySharedPivKey, signData, self._sharedEd25519PivKey.public_key()):
+            return
+        WaitingResponses.updateValue(key, 1)
     def recv(self) -> Generator[tuple[bytes, tuple[str, int]], None, None]:
         for data, addr in super().recv():
+            if len(data) < PrivateSecurePacketElementSize.PACKET_FLAG+PrivateSecurePacketElementSize.MODE_FLAG:
+                continue
             pFlag, mFlag, mainData = bytesSplitter.split(
-                data+b"\0",
+                data+b"\x00",
                 PrivateSecurePacketElementSize.PACKET_FLAG,
                 PrivateSecurePacketElementSize.MODE_FLAG,
                 includeRest=True

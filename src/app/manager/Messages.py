@@ -3,6 +3,7 @@ import logging
 from enum import Enum
 
 from src.protocol.Protocol import *
+from src.protocol.ProgramProtocol import *
 from src.app.protocol.Protocol import *
 from src.app.model.Message import MyMessage, MyReplyMessage, OthersMessage
 from src.app.protocol.ProgramProtocol import *
@@ -88,7 +89,7 @@ class Messages(BaseDb[AllMessageType, AllMessageSqlType, bytes]):
         return MessagePutStatus.SUCCESS
 
 class MyMessages(Messages):
-    _db = Db(DB_FILE)
+    _db = Db(SAVED_PATH+MESSAGES_FILE)
 
     TABLE = "myMessages"
     KEY_NAME = "messageId"
@@ -103,7 +104,7 @@ class MyMessages(Messages):
     """)
 
 class MyReplyMessages(Messages):
-    _db = Db(DB_FILE)
+    _db = Db(SAVED_PATH+MESSAGES_FILE)
 
     TABLE = "myReplyMessages"
     KEY_NAME = "messageId"
@@ -119,7 +120,7 @@ class MyReplyMessages(Messages):
     """)
 
 class OthersMessages(Messages):
-    _db = Db(DB_FILE)
+    _db = Db(SAVED_PATH+MESSAGES_FILE)
 
     TABLE = "othersMessages"
     KEY_NAME = "messageId"

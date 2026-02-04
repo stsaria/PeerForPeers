@@ -1,4 +1,4 @@
-from threading import Condition, Lock
+from threading import Condition, Lock, Event
 from time import time
 
 from src.interface.Manager import ObjectIndexedKVManager
@@ -50,17 +50,17 @@ class WaitingResponses(ObjectIndexedKVManager):
             return cls._getEitherLocked(key, 0)
     
     @classmethod
-    def waitAndGet(cls, key:WAITING_RESPONSE_KEY, timeoutMilliSec:int) -> ResponseValue | None:
+    def waitAndGet(cls, key:WAITING_RESPONSE_KEY, timeoutMilliSec:int | None, stop:Event | None = None) -> ResponseValue | None:
         with cls._waitingResponsesCond:
             cls._waitingResponsesCond.wait_for(
-                lambda: cls._getEitherLocked(key, 1) != None,
-                timeoutMilliSec / 1000
+                lambda: cls._getEitherLocked(key, 1) != None or (stop != None and stop.is_set()),
+                timeoutMilliSec / 1000 if timeoutMilliSec != None else None
             )
-            return cls._getEitherLocked(key, 1)
+            return cls._getEitherLocked(key, 1) if stop == None or not stop.is_set() else None
     
     @classmethod
     def gc(cls) -> None:
         with cls._waitingResponsesCond:
-            for k,v in cls._waitingResponses:
+            for k,v in cls._waitingResponses.items():
                 if time() - v[2] > WAITING_RESPONSES_GC_SECS:
                     cls._waitingResponses.pop(k)

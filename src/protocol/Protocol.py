@@ -2,7 +2,7 @@ from enum import IntEnum
 
 ENDIAN = "big"
 
-MAGIC = b"P3P"
+MAGIC = b"P4P"
 
 PROTOCOL_CLIENT = 1.0
 
@@ -32,6 +32,8 @@ AES_NONCE_SIZE = 12
 
 RELIABLE_SESSION_ID_SIZE = 2
 
+ANY_SECRET_SIZE = 32
+
 class X25519DeriveInfoBase:
     SECURE = "SECURE_X25519_DERIVE_KEY"
     RELIABLE = "RELIABLE_X25519_DERIVE_KEY"
@@ -57,6 +59,11 @@ class SecurePacketElementSize(PacketElementSize):
     X25519_PUBLIC_KEY=32
     AES_SALT=32
     SEQ=8
+    
+    IP = 19
+    PORT = 2
+
+    IS_SUCCESS_AGENCY_PING = 1
 
 class ReliablePacketElementSize(PacketElementSize):
     SESSION_ID=2
@@ -74,25 +81,35 @@ class PrivateSecurePacketElementSize(PacketElementSize):
     AES_SALT=32
     SEQ=8
 
+class GossipPacketElementSize(PacketElementSize):
+    XXHASH64=8
+    IP = 19
+    PORT = 2
+    ED25519_PUBLIC_KEY=32
+
 class PacketFlag(IntEnum):
     PLAIN = 1
     SECURE = 2
     RELIABLE = 3
     PRIVATE_SECURE = 4
+    GOSSIP = 5
 
 class PacketModeFlag(IntEnum):
-    HELLO = 1
-    RESP_HELLO = 2
-    SECOND_HELLO = 3
-    MAIN_DATA = 5
+    PING = 1
+    PONG = 2
+    HELLO = 3
+    RESP_HELLO = 4
+    SECOND_HELLO = 5
+    MAIN_DATA = 6
 
-    PING = 10
-    PONG = 11
+    AGENCY_PING = 10
+    RESP_AGENCY_PING = 11
 
     CHUNK_CHECK = 20
     RESP_CHUNK_CHECK = 21
     REDUNDANCY = 22
 
+    GOSSIP = 30
 
 class CommuType(IntEnum):
     GET_MESSAGE_LIST = 1

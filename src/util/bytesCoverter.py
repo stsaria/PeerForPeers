@@ -9,10 +9,10 @@ def btoi(bI:bytes, endian:str, signed=False) -> int:
 def stob(s:str, size:int, encoding:str) -> bytes:
     b = bytearray()
     for c in s:
-        if len(b) + c.__sizeof__() > size:
+        if size and len(b) + len(c.encode(encoding)) > size:
             break
-        b += c.encode(encoding)
-    return b
+        b += c.encode(encoding, errors="ignore")
+    return bytes(b)
 
 def btos(b:bytes, encoding:str) -> str:
-    return b.strip(b"\x00").decode(encoding, errors="ignore")
+    return b.rstrip(b"\x00").decode(encoding, errors="ignore")

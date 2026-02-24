@@ -4,13 +4,13 @@ ENDIAN = "big"
 
 MAGIC = b"P4P"
 
-PROTOCOL_CLIENT = 1.0
+PROTOCOL_CLIENT = 1
 
-PROTOCOL_VER = 1
+PROTOCOL_VER = 1.0
 
-MAGIC += bytes([PROTOCOL_CLIENT, PROTOCOL_VER])
+MAGIC += bytes([int(PROTOCOL_CLIENT), PROTOCOL_VER])
 
-SOCKET_BUFFER = 1024
+SOCKET_BUFFER = 1400 # for opus
 STR_ENCODING = "utf-8"
 
 REDUNDANCY = 3
@@ -122,3 +122,13 @@ class CommuType(IntEnum):
 
     SEND_MESSAGE = 10
     SEND_VOICE = 11
+
+def getMaxDataSizeOnAesEncrypted():
+    return (
+        (
+            SOCKET_BUFFER
+            - SecurePacketElementSize.MAGIC
+            - SecurePacketElementSize.PACKET_FLAG
+            - SecurePacketElementSize.MODE_FLAG
+        ) * 16 // 16
+    )

@@ -30,6 +30,9 @@ class PrivateSecureNet(ExtendedNet):
         self._recvCounts:dict[tuple[str, int], int] = {}
 
         self._ed25519PubKeys:dict[tuple[str, int], Ed25519PublicKey] = {}
+    
+    def getSecrets(self) -> tuple[bytes, bytes]:
+        return self._sharedSecret, self._sharedEd25519PivKey.private_bytes_raw()
 
     def hello(self, nodeIdentify:NodeIdentify) -> bool:
         waitingResponse = WaitingResponse(

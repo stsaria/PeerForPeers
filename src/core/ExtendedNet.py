@@ -3,20 +3,21 @@ from threading import Lock, Thread
 from time import time
 from typing import Generator
 
+from manager.CustomFuncs import CustomFunc, CustomFuncs
 from src.manager.Redundancies import Redundancies
 from src.manager.WaitingResponses import WaitingResponses
 from src.model.WaitingResponse import WaitingResponse
 from src.protocol.ProgramProtocol import *
 from src.model.NodeIdentify import NodeIdentify
 from src.core.Net import Net
-from src.model.NetConfig import NetConfig
+from src.model.NetConfig import SecureNetConfig
 from src.protocol.Protocol import *
 from src.util import redundancyCalc
 from src.util.bytesCoverter import itob
 
 class ExtendedNet(Net):
     _shareVars = ["_netConfig", "_sock", "_gens", "_gensLock", "_started", "_startedLock"]
-    def __init__(self, netConfig:NetConfig):
+    def __init__(self, netConfig:SecureNetConfig):
         super().__init__(netConfig)
 
         self._started = False
@@ -77,6 +78,9 @@ class ExtendedNet(Net):
         return True
     def _recvLoop(self) -> None:
         for data, addr in super().recv():
+            if not CustomFuncs.get(CustomFunc.WILL_PASS_PACKET_FOR_ALL)(addr, data):
+                continue
+
             if data[
                 :PacketElementSize.PACKET_FLAG
                 +PacketElementSize.MODE_FLAG

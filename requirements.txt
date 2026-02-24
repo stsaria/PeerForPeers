@@ -1,5 +1,8 @@
 cachetools==6.2.5
 cffi==2.0.0
 cryptography==46.0.3
+numpy==2.4.2
+opuslib==3.0.1
 pycparser==3.0
+sounddevice==0.5.5
 xxhash==3.6.0

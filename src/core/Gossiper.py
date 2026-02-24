@@ -173,3 +173,6 @@ class Gossiper:
     def start(self) -> None:
         Thread(target=self._recv, daemon=True).start()
         Thread(target=self._syncer, daemon=True).start()
+    
+    def close(self) -> None:
+        self._extendedNet.close()

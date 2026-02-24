@@ -21,7 +21,7 @@ class ReliableRecvFailed(Exception):
 
 class ReliableNetController:
     def __init__(self, netObj:ExtendedNet, ed25519PrivateKey:Ed25519PrivateKey):
-        self._net = netObj
+        self._extendedNet = netObj
         self._ed25519PrivateKey = ed25519PrivateKey
         self._sessions:dict[bytes, ReliableSession] = {}
         self._sessionsLock:Lock = Lock()
@@ -42,7 +42,7 @@ class ReliableNetController:
                 itob(0, AES_NONCE_SIZE-SecurePacketElementSize.SEQ, ENDIAN)+seqB,
                 None
             )
-            self._net.sendTo(sD, nodeIdentify)
+            self._extendedNet.sendTo(sD, nodeIdentify)
         c = 0
         badDataSeq = []
         while redundancyCond(c):
@@ -67,11 +67,11 @@ class ReliableNetController:
                     continue
                 elif len(sendData)+startSeq-1 < s:
                     continue
-                self._net.sendTo(sentData[s], nodeIdentify)
+                self._extendedNet.sendTo(sentData[s], nodeIdentify)
         return True
 
 
-    def send(self, nodeIdentify:NodeIdentify, sid:bytes, sendDataGenerator:Generator[bytes, None, None], size:int) -> bool:
+    def send(self, nodeIdentify:NodeIdentify, sid:bytes, sendDataGenerator:Generator[bytes, None, None]) -> bool:
         waitingResponse = WaitingResponse(
             nodeIdentify=nodeIdentify,
             waitingInst=self,
@@ -82,7 +82,7 @@ class ReliableNetController:
         e = EncryptCollection(
             myX25519PivKey=encrypter.generateX25519PivKey()
         )
-        self._net.sendTo(
+        self._extendedNet.sendTo(
             (
                 itob(PacketFlag.RELIABLE, SecurePacketElementSize.PACKET_FLAG)
                 +itob(PacketModeFlag.HELLO, SecurePacketElementSize.MODE_FLAG)
@@ -137,7 +137,6 @@ class ReliableNetController:
                 size=size,
                 otherPartyEd25519PublicKey=otherPartyEd25519PublicKey
             )
-            s.calcChunks() = ReliableSession
             self._sessions[id] = s
         return recvGen
     def _recvHello(self, session:ReliableSession, mD:bytes, addr:tuple[str, int]) -> None:
@@ -157,7 +156,7 @@ class ReliableNetController:
             e.myX25519PivKey.public_key().public_bytes_raw(),
             e.salt
         )
-        self._net.sendTo(
+        self._extendedNet.sendTo(
             (
                 itob(PacketFlag.RELIABLE, SecurePacketElementSize.PACKET_FLAG)
                 +itob(PacketModeFlag.RESP_HELLO, SecurePacketElementSize.MODE_FLAG)
@@ -264,7 +263,7 @@ class ReliableNetController:
             return
         missingSeqs = self._getChunkMissingPacketSeqs(session)
         missingSeqsB = b"".join([itob(s, ReliablePacketElementSize.SEQ_AND_CHUNK_COUNT, ENDIAN) for s in missingSeqs])
-        self._net.sendTo(
+        self._extendedNet.sendTo(
             (
                 +itob(PacketFlag.RELIABLE, ReliablePacketElementSize.PACKET_FLAG)
                 +itob(PacketModeFlag.RESP_CHUNK_CHECK)
@@ -301,19 +300,13 @@ class ReliableNetController:
         ]
         WaitingResponses.updateValue(key, badPacketSeqs)
 
-
-
-
     def finishSession(self, sessionId:bytes) -> None:
         with self._sessionsLock:
             if (session := self._sessions.get(sessionId)):
                 self._finishRecv(session)
 
-
-
-
     def recver(self) -> None:
-        for data, addr in self._net.recv():
+        for data, addr in self._extendedNet.recv():
             if len(data) < ReliablePacketElementSize.PACKET_FLAG+ReliablePacketElementSize.MODE_FLAG+ReliablePacketElementSize.SESSION_ID:
                 continue
             pFlag, mFlag, sid, mainData = bytesSplitter.split(
@@ -349,12 +342,13 @@ class ReliableNetController:
             Thread(
                 target=target, args=args, daemon=True
             ).start()
-                
-                
-
-
-
-
-                
-
-
+    
+    def stop(self) -> None:
+        with self._sessionsLock:
+            for session in self._sessions.values():
+                try:
+                    session.closeGen()
+                except Exception:
+                    pass
+            self._sessions = {}
+        self._extendedNet.close()

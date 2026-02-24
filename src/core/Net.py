@@ -9,11 +9,11 @@ import select
 
 from src.manager.BannedIps import BannedIps
 from src.protocol.Protocol import MAGIC, SOCKET_BUFFER, PacketElementSize
-from src.model.NetConfig import NetConfig
+from src.model.NetConfig import SecureNetConfig
 
 
 class Net:
-    def __init__(self, netConfig: NetConfig) -> None:
+    def __init__(self, netConfig: SecureNetConfig) -> None:
         self._netConfig = netConfig
         self._socks: list[Socket] = []
 

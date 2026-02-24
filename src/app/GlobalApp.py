@@ -5,9 +5,10 @@ import os
 import random
 import shutil
 import statistics
-from threading import Condition, Event, Lock, Thread
+from threading import Condition, Event, Lock, RLock, Thread
 from time import sleep, time
-from typing import Generator
+from typing import Any, Generator
+from enum import auto as a
 
 from src.app.manager.Messages import AllMessageType, MessagePutStatus, Messages, MyMessages, MyReplyMessages, MyReplyMessageSqlType, MyMessageSqlType, OthersMessageSqlType, OthersMessages
 from src.core.Gossiper import Gossiper
@@ -32,6 +33,7 @@ from src.util import bytesSplitter, ed25519
 from src.util.ed25519 import Ed25519PrivateKey
 from src.util.bytesCoverter import btoi, btos, itob, stob
 from src.util.gene import getGen
+from src.util.Result import Result
 
 logger = logging.getLogger(__name__)
 
@@ -44,38 +46,50 @@ class GlobalApp:
         self._reliableNet:ReliableNetController = ReliableNetController(self._extendedNet, netConfig.ed25519PrivateKey)
         self._gossiper:Gossiper = Gossiper(self._extendedNet, netConfig.ed25519PrivateKey)
 
-        self._friends:set[NodeIdentify] = set()
-        self._waitingFriends:set[NodeIdentify] = set()
-        self._reqFirends:set[NodeIdentify] = set()
+        self._ignoreReqFirends:bool = False
+        self._ignoreReqFirendsLock:Lock = Lock()
 
-        self._friendsLock:Lock = Lock()
+        self._friends:set[NodeIdentify] = set()
+        self._waitingToAddFriends:set[NodeIdentify] = set()
+        self._requestedToMeFriends:set[NodeIdentify] = set()
+        self._friendsCond:Condition = Condition(RLock())
 
         self._waitingOfflineFriendPubKeys:set[bytes] = set()
         self._waitingOfflineFriendPubKeysLock:Lock = Lock()
 
-        self._ignoreReqFirends:bool = False
-        self._ignoreReqFirendsLock:Lock = Lock()
-
         self._ipAndPortToNodes:dict[tuple[str, int], Node] = {}
-        self._ipAndPortToNodesCond:Condition = Condition(Lock())
+        self._ipAndPortToNodesCond:Condition = Condition(RLock())
 
         self._messages:dict[bytes, MessageForSorting] = {}
         self._messagesLock:Lock = Lock()
+
+        self._invitedNodeAddrAndSecrets:dict[tuple[str, int], tuple[bytes, bytes]] = {}
+        self._invitedNodeAddrAndSecretsCond:Condition = Condition(RLock())
+
+        self._stop = Event()
     
         logger.info("initialized.")
     
-    def setIgnoreReqFriends(self, ignore:bool) -> None:
+    def setIgnoreReqFriends(self, ignore:bool) -> bool:
         with self._ignoreReqFirendsLock:
+            old = self._ignoreReqFirends
             self._ignoreReqFirends = ignore
+            return old
+    
+    def getIgnoreReqFriends(self) -> bool:
+        with self._ignoreReqFirendsLock:
+            return self._ignoreReqFirends
 
-    def hello(self, nodeIdentify:NodeIdentify) -> bool:
+    class _HelloResult(Result):
+        PING_FAILED = a()
+        PROTOCOL_HELLO_FAILED = a()
+        APP_HELLO_TIMEOUT = a()
+    def _hello(self, nodeIdentify:NodeIdentify) -> _HelloResult:
         logger.debug(f"{nodeIdentify.port}")
         if not self._secureNet.pingAndSetRedundancy(nodeIdentify, dontUpdateIfContains=False):
-            logger.warning(f"{nodeIdentify.port}")
-            return False
+            return self._HelloResult.PING_FAILED
         if not self._secureNet.hello(nodeIdentify):
-            logger.warning(f"{nodeIdentify.port}")
-            return False
+            return self._HelloResult.PROTOCOL_HELLO_FAILED
         waitingResponse = WaitingResponse(
             nodeIdentify,
             self,
@@ -91,7 +105,7 @@ class GlobalApp:
         if r := WaitingResponses.waitAndGet(waitingResponse, TIME_OUT_MILLI_SEC) == None:
             WaitingResponses.delete(waitingResponse)
             logger.error(f"{nodeIdentify.port} failed (no response)")
-            return False
+            return self._HelloResult.APP_HELLO_TIMEOUT
         WaitingResponses.delete(waitingResponse)
         with self._ipAndPortToNodesCond:
             self._ipAndPortToNodes[(nodeIdentify.ip, nodeIdentify.port)] = Node(
@@ -102,17 +116,31 @@ class GlobalApp:
                 iAmInfo=r,
                 startTimestamp=time()
             )
+            self._ipAndPortToNodesCond.notify_all()
         logger.debug(f"{nodeIdentify.port} succeeded")
-        return True
+        return self._HelloResult.SUCCESS
+
+    class AcceptReqResult(_HelloResult):
+        pass
+    def addNode(self, nodeIdentify:NodeIdentify) -> AcceptReqResult:
+        if (r := self._hello(nodeIdentify)) != self._HelloResult.SUCCESS:
+            return self.AcceptReqResult(r.value)
+        with self._ipAndPortToNodesCond:
+            nodes:list[NodeIdentify] = self._getNodesSyncronized()
+            for node in nodes:
+                if (node.ip, node.port) in self._ipAndPortToNodes.keys():
+                    continue
+                Thread(target=self._hello, args=(node,), daemon=True).start()
+        return self.AcceptReqResult.SUCCESS
     
     def _waitRespFriend(self, waitingResponse:WaitingResponse, stop:Event) -> None:
-        with self._friendsLock:
-            self._waitingFriends.add(waitingResponse.nodeIdentify)
+        with self._friendsCond:
+            self._waitingToAddFriends.add(waitingResponse.nodeIdentify)
         if WaitingResponses.waitAndGet(waitingResponse, TIME_OUT_MILLI_SEC, stop) == None:
             WaitingResponses.delete(waitingResponse)
             logger.warning(f"failed to add friend {waitingResponse.nodeIdentify.port}")
-            with self._friendsLock:
-                self._waitingFriends.remove(waitingResponse.nodeIdentify)
+            with self._friendsCond:
+                self._waitingToAddFriends.remove(waitingResponse.nodeIdentify)
             return
         WaitingResponses.delete(waitingResponse)
         logger.debug(f"successfully added friend {waitingResponse.nodeIdentify.port}")
@@ -121,17 +149,20 @@ class GlobalApp:
             +AppModeFlag.SECOND_RESP_FRIEND,
             waitingResponse.nodeIdentify
         )
-        with self._friendsLock:
-            self._waitingFriends.remove(waitingResponse.nodeIdentify)
+        with self._friendsCond:
+            self._waitingToAddFriends.remove(waitingResponse.nodeIdentify)
             self._friends.add(waitingResponse.nodeIdentify)
             with open(SAVED_PATH+FRIENDS_PUBKEYS_FILE, "w") as f:
                 f.write(json.dumps(list(self._friends)))
+            self._friendsCond.notify_all()
         
-    def addFriend(self, nodeIdentify:NodeIdentify) -> bool:
-        with self._friendsLock:
-            if len(self._friends)+len(self._waitingFriends) >= MAX_FIRENDS:
+    class AddFriendResult(Result):
+        TOO_MANY_FRIENDS = a()
+    def addFriend(self, nodeIdentify:NodeIdentify) -> AddFriendResult:
+        with self._friendsCond:
+            if len(self._friends)+len(self._waitingToAddFriends) >= MAX_FIRENDS:
                 logger.warning(f"too many friend adding processes ongoing.")
-                return False
+                return self.AddFriendResult.TOO_MANY_FRIENDS
         waitingResponse = WaitingResponse(
             nodeIdentify,
             self,
@@ -144,14 +175,40 @@ class GlobalApp:
             nodeIdentify
         )
         Thread(target=self._waitRespFriend, args=(waitingResponse, None), daemon=True).start()
-        return True
+        return self.AddFriendResult.SUCCESS
+
+    def getNodes(self) -> list[NodeIdentify]:
+        with self._ipAndPortToNodesCond:
+            ns = []
+            for n in self._ipAndPortToNodes.values():
+                ns.append(
+                    NodeIdentify(
+                        ip=n.ip,
+                        port=n.port,
+                        ed25519PublicKey=n.ed25519PublicKey
+                    )   
+                )
+            return ns
+
+    def keepGettingNodes(self) -> Generator[list[NodeIdentify], None, None]:
+        with self._ipAndPortToNodesCond:
+            while True:
+                self._ipAndPortToNodesCond.wait()
+                yield self.getNodes()
+
     
-    def getFirends(self) -> list[NodeIdentify]:
-        with self._friendsLock:
+    def getFriends(self) -> list[NodeIdentify]:
+        with self._friendsCond:
             return list(self._friends)
     
+    def keepGettingFriends(self) -> Generator[list[NodeIdentify], None, None]:
+        with self._friendsCond:
+            while True:
+                self._friendsCond.wait()
+                yield self.getFriends()
+    
     def getOnlineFriends(self) -> list[NodeIdentify]:
-        friends = self.getFirends()
+        friends = self.getFriends()
         onlineFriends:list[NodeIdentify] = []
         with self._ipAndPortToNodesCond:
             nodes = self._ipAndPortToNodes.values()
@@ -163,21 +220,42 @@ class GlobalApp:
             )) in friends:
                 onlineFriends.append(n)
         return onlineFriends
+
+    def keepGettingOnlineFriends(self, stop:Event) -> Generator[list[NodeIdentify], None, None]:
+        with self._ipAndPortToNodesCond:
+            while not stop.is_set():
+                self._ipAndPortToNodesCond.wait()
+                yield self.getOnlineFriends()
+
+    def getWaitingToAddFriends(self) -> list[NodeIdentify]:
+        with self._friendsCond:
+            return list(self._waitingToAddFriends)
     
-    def getWaitingFriends(self) -> list[NodeIdentify]:
-        with self._friendsLock:
-            return list(self._waitingFriends)
+    def keepGettingWaitingToAddFriends(self, stop:Event) -> Generator[list[NodeIdentify], None, None]:
+        with self._friendsCond:
+            while not stop.is_set():
+                self._friendsCond.wait()
+                yield self.getWaitingToAddFriends()
     
-    def getReqFriends(self) -> list[NodeIdentify]:
-        with self._friendsLock:
-            return list(self._reqFirends)
+    def getRequestedToMeFriends(self) -> list[NodeIdentify]:
+        with self._friendsCond:
+            return list(self._requestedToMeFriends)
     
-    def acceptReqFriend(self, nodeIdentify:NodeIdentify) -> bool:
-        with self._friendsLock:
-            if nodeIdentify not in self._reqFirends:
+    def keepGettingRequestedToMeFriends(self, stop:Event) -> Generator[list[NodeIdentify], None, None]:
+        with self._friendsCond:
+            while not stop.is_set():
+                self._friendsCond.wait()
+                yield self.getRequestedToMeFriends()
+    
+    class AcceptReqResult(Result):
+        NOT_FOUND_FRIEND_REQUEST = a()
+        RESP_FRIEND_TIMEOUT = a()
+    def acceptReqFriend(self, nodeIdentify:NodeIdentify) -> AcceptReqResult:
+        with self._friendsCond:
+            if nodeIdentify not in self._requestedToMeFriends:
                 logger.warning(f"no friend request from {nodeIdentify.port}")
-                return False
-            self._reqFirends.remove(nodeIdentify)
+                return self.AcceptReqResult.NOT_FOUND_FRIEND_REQUEST
+            self._requestedToMeFriends.remove(nodeIdentify)
         WaitingResponse = WaitingResponse(
             nodeIdentify,
             self,
@@ -191,17 +269,18 @@ class GlobalApp:
         )
         if WaitingResponses.waitAndGet(WaitingResponse, TIME_OUT_MILLI_SEC) == None:
             WaitingResponses.delete(WaitingResponse)
-            return False
+            return self.AcceptReqResult.RESP_FRIEND_TIMEOUT
         WaitingResponses.delete(WaitingResponse)
-        with self._friendsLock:
+        with self._friendsCond:
             self._friends.add(nodeIdentify)
             with open(SAVED_PATH+FRIENDS_PUBKEYS_FILE, "w") as f:
                 f.write(json.dumps(list(self._friends)))
+            self._friendsCond.notify_all()
         logger.debug(f"accepted friend request from {nodeIdentify.port}")
-        return True
+        return self.AcceptReqResult.SUCCESS
     
-    def checkAmIFirend(self, nodeIdentify:NodeIdentify) -> bool:
-        with self._friendsLock:
+    def checkAmIFriend(self, nodeIdentify:NodeIdentify) -> bool:
+        with self._friendsCond:
             if not nodeIdentify in self._friends:
                 return False
         waitingResponse = WaitingResponse(
@@ -222,32 +301,38 @@ class GlobalApp:
         return True
     
     def removeFriend(self, nodeIdentify:NodeIdentify) -> None:
-        with self._friendsLock:
+        with self._friendsCond:
             if nodeIdentify in self._friends:
                 self._friends.remove(nodeIdentify)
                 with open(SAVED_PATH+FRIENDS_PUBKEYS_FILE, "w") as f:
                     f.write(json.dumps(list(self._friends)))
+                self._friendsCond.notify_all()
     
-    def postMessage(self, content:str) -> MessagePutStatus:
+    class PostMessageResult(Result):
+        CONTENT_SIZE_IS_TOO_BIG = a()
+    def postMessage(self, content:str) -> PostMessageResult:
         msg = MyMessage(
             messageId=os.urandom(GlobalAppElementSize.MESSAGE_ID),
             content=content,
             timestamp=int(time())
         )
-        return MyMessages.put(msg)
+        return self.PostMessageResult(MyMessages.put(msg).value)
 
-    def postReplyMessage(self, rootMessage:OthersMessage, content:str) -> bool:
+    class PostReplyMessageResult(Result):
+        CONTENT_SIZE_IS_TOO_BIG = a()
+        ROOT_MESSAGE_CONTENT_IS_TOO_BIG = a()
+    def postReplyMessage(self, rootMessage:OthersMessage, content:str) -> PostReplyMessageResult:
         msg = MyReplyMessage(
             messageId=os.urandom(GlobalAppElementSize.MESSAGE_ID),
             rootMessageId=rootMessage.messageId,
             content=content,
             timestamp=int(time())
         )
-        if MyReplyMessages.put(msg) != MessagePutStatus.SUCCESS:
-            return False
-        elif OthersMessages.put(rootMessage) != MessagePutStatus.SUCCESS:
-            return False
-        return True
+        if (r := MyReplyMessages.put(msg)) != MyReplyMessages.PutResult.SUCCESS:
+            return self.PostReplyMessageResult(r.value)
+        elif (r := OthersMessages.put(rootMessage)) != OthersMessages.PutResult.SUCCESS:
+            return self.PostReplyMessageResult(r.value+1)
+        return self.PostReplyMessageResult.SUCCESS
 
     def getMyMessages(self) -> list[MyMessage]:
         return MyMessages.getAll()
@@ -275,12 +360,24 @@ class GlobalApp:
                 )
         return list(messages.values())
 
+    def getInvitedNodeAddrAndSecrets(self) -> dict[tuple[str, int], tuple[bytes, bytes]]:
+        with self._invitedNodeAddrAndSecretsCond:
+            return self._invitedNodeAddrAndSecrets.copy()
+    
+    def keepGettingInvitedNodeAddrAndSecrets(self, stop:Event) -> Generator[dict[tuple[str, int], tuple[bytes, bytes]], None, None]:
+        with self._invitedNodeAddrAndSecretsCond:
+            while not stop.is_set():
+                self._invitedNodeAddrAndSecretsCond.wait()
+                yield self._invitedNodeAddrAndSecrets.copy()
+    
+    # end methods for public use
+
     def _waitAndAddFriendNode(self, pubKey:bytes) -> None:
         nI = self._gossiper.waitAndGetNodeByPublicKey(pubKey, None)
-        if not self.hello(nI):
+        if not self._hello(nI):
             logger.warning(f"failed to add friend node {nI.port}")
             return
-        if not self.checkAmIFirend(nI):
+        if not self.checkAmIFriend(nI):
             logger.warning(f"not a friend node {nI.port}")
             return
         logger.debug(f"friend node {nI.port} added.")
@@ -290,14 +387,14 @@ class GlobalApp:
         with self._ipAndPortToNodesCond:
             while True:
                 if self._ipAndPortToNodesCond.wait(None):
-                    with self._friendsLock:
+                    with self._friendsCond:
                         friends = list(self._friends)
                     for f in friends:
                         if (f.ip, f.port) in self._ipAndPortToNodes.keys() or f.ed25519PublicKey.public_bytes_raw() in waitNodePubKeyAndEvents.keys():
                             continue
                         waitNodePubKeyAndEvents[f.ed25519PublicKey.public_bytes_raw()] = Event()
                         Thread(target=self._waitAndAddFriendNode, args=(f.ed25519PublicKey.public_bytes_raw(),), daemon=True).start()
-                with self._friendsLock:
+                with self._friendsCond:
                     friendPubKeys = [f.ed25519PublicKey.public_bytes_raw() for f in self._friends]
                     for k, e in waitNodePubKeyAndEvents.items():
                         if not k in friendPubKeys:
@@ -626,8 +723,7 @@ class GlobalApp:
         self._reliableNet.send(
             nI,
             sid,
-            gen,
-            len(d)
+            gen
         )
         logger.debug(f"sent {len(d)} bytes to {addr}")
 
@@ -719,8 +815,7 @@ class GlobalApp:
         self._reliableNet.send(
             nI,
             sid,
-            gen,
-            len(d)
+            gen
         )
         logger.debug(f"sent {len(d)} bytes to {addr}")
 
@@ -820,8 +915,8 @@ class GlobalApp:
             port=addr[1],
             ed25519PublicKey=AddrToEd25519PubKeys.get(addr)
         )
-        with self._friendsLock:
-            self._reqFirends.add(nI)
+        with self._friendsCond:
+            self._requestedToMeFriends.add(nI)
     
     def _recvRespFriend(self, addr:tuple[str, int]) -> None:
         key:WAITING_RESPONSE_KEY = (addr[0], addr[1], self, AppModeFlag.RESP_FRIEND)
@@ -841,7 +936,7 @@ class GlobalApp:
             port=addr[1],
             ed25519PublicKey=AddrToEd25519PubKeys.get(addr)
         )
-        with self._friendsLock:
+        with self._friendsCond:
             if not nI in self._friends:
                 return
         self._secureNet.sendToSecure(
@@ -855,10 +950,23 @@ class GlobalApp:
         if not WaitingResponses.containsKey(key):
             return
         WaitingResponses.updateValue(key, 1)
+    
+    def _recvInviteForDirectApp(self, mD:bytes, addr:tuple[str, int]) -> None:
+        sharedSecret, sharedEd25519PivKey = bytesSplitter.split(
+            mD,
+            ANY_SECRET_SIZE,
+            GlobalAppElementSize.ED25519_PUBLIC_KEY
+        )
+        with self._invitedNodeAddrAndSecretsCond:
+            self._invitedNodeAddrAndSecrets[addr] = (sharedSecret, sharedEd25519PivKey)
+            self._invitedNodeAddrAndSecretsCond.notify_all()
         
     def _recv(self) -> None:
         logger.info("thread started.")
         for data, addr in self._secureNet.recv():
+            if self._stop.is_set():
+                logger.info("thread stopped.")
+                return
             if len(data) < GlobalAppElementSize.APP_FLAG+GlobalAppElementSize.MODE_FLAG:
                 continue
             aFlag, mFlag, mainData = bytesSplitter.split(
@@ -874,6 +982,10 @@ class GlobalApp:
                 mFlag = AppModeFlag(btoi(mFlag, ENDIAN))
             except ValueError:
                 continue
+
+            if not CustomFuncs.get(CustomFunc.WILL_PASS_PACKET_FOR_GLOBAL_APP)(addr, aFlag, mFlag, mainData):
+                continue
+
             if mFlag == AppModeFlag.HELLO:
                 target, args = self._recvHello, (mainData, addr)
             elif mFlag == AppModeFlag.RESP_HELLO:
@@ -908,10 +1020,12 @@ class GlobalApp:
                         target, args = self._recvAmIFirend, (addr,)
                     case AppModeFlag.RESP_AM_I_FRIEND:
                         target, args = self._recvRespAmIFirend, (addr,)
+                    case AppModeFlag.INVITE_FOR_DIRECT_APP:
+                        target, args = self._recvInviteForDirectApp, (mainData, addr)
             Thread(target=target, args=args, daemon=True).start()
 
     def sync(self) -> None:
-        with self._ipAndPortToNodesCond and self._friendsLock:
+        with self._ipAndPortToNodesCond and self._friendsCond:
             sortedNodes:list[Node] = CustomFuncs.get(CustomFunc.GET_SORTED_NODES)(list(self._ipAndPortToNodes.values()), list(self._friends))
             if len(sortedNodes) > MAX_NODES:
                 for n in sortedNodes[MAX_NODES-MAX_NODES_MARGIN:]:
@@ -926,7 +1040,7 @@ class GlobalApp:
                         min(NODES_LIMIT_FOR_GET, MAX_NODES-len(self._ipAndPortToNodes))
                     ):
                         if not self._ipAndPortToNodes.get((nI.ip, nI.port)):
-                            self.hello(nI)
+                            self._hello(nI)
             sortedNodes = CustomFuncs.get(CustomFunc.GET_SORTED_NODES)(list(self._ipAndPortToNodes.values()))
         messages:list[tuple[NodeIdentify, AllMessageType]] = []
         messagesTree:dict[bytes, MessageForSorting] = {}
@@ -956,7 +1070,7 @@ class GlobalApp:
 
     def _sync(self) -> None:
         logger.info("_sync thread started.")
-        while True:
+        while not self._stop.is_set():
             self.sync(self)
             sleep(SyncIntervalSec.GLOBAL)
 
@@ -966,3 +1080,11 @@ class GlobalApp:
         if runSync:
             Thread(target=self._sync, daemon=True).start()
         self._gossiper.start()
+    
+    def _close(self) -> None:
+        self._secureNet.close()
+        self._gossiper.close()
+    
+    def stop(self) -> None:
+        self._stop.set()
+        self._close()

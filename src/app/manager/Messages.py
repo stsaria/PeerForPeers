@@ -8,6 +8,7 @@ from src.app.protocol.Protocol import *
 from src.app.model.Message import MyMessage, MyReplyMessage, OthersMessage
 from src.app.protocol.ProgramProtocol import *
 from src.app.util.Db import Db
+from util.Result import Result
 
 logger = logging.getLogger(__name__)
 
@@ -72,17 +73,19 @@ class BaseDb(Generic[ModelT, RowT, PrimaryKeyT]):
         return [cls._rowToModel(r) for r in rows]
     
 class Messages(BaseDb[AllMessageType, AllMessageSqlType, bytes]):
+    class PutResult(Result):
+        CONTENT_SIZE_IS_TOO_BIG = 1
     @classmethod
-    def put(cls, message:AllMessageType) -> MessagePutStatus:
+    def put(cls, message:AllMessageType) -> PutResult:
         if len(message.content.encode(STR_ENCODING)) > MESSAGE_CONTENT_LIMIT:
-            return MessagePutStatus.CONTENT_SIZE_IS_TOO_BIG
+            return cls.PutResult.CONTENT_SIZE_IS_TOO_BIG
 
         sqlMsg = message.getSqlMsg()
         cls._db.execAndCommit(
             f"INSERT INTO {cls.TABLE} VALUES ("+(", ".join(["?" for _ in range(len(sqlMsg))]))+")",
             sqlMsg
         )
-        return MessagePutStatus.SUCCESS
+        return cls.PutResult.SUCCESS
 
 class MyMessages(Messages):
     _db = Db(SAVED_PATH+MESSAGES_FILE)

@@ -37,8 +37,7 @@ MESSAGE_LIFE_SEC = 60*60*24
 
 CHANCE_FOR_SEND_REPLY_MESSAGE = 1/5
 
-class StatusForJoinNetwork(StatusForHello):
-    PROTOCOL_HELLO_FAIL = 2
+class StatusForHelloForApp(StatusForHello):
     UNKNOWN = -1
 
 class SyncIntervalSec:
@@ -47,3 +46,12 @@ class SyncIntervalSec:
 
 class PingIntervalSec:
     DIRECT = 5
+
+
+
+DIRECT_VOICE_SAMPLING_RATE = 16000
+DIRECT_VOICE_CHANNELS = 1
+DIRECT_VOICE_SAMPLE_SEC = 0.02
+# Opus encoded size (maybe 150~300b) < getMaxDataSizeOnAesEncrypted()
+DIRECT_VOICE_DEVICE_DEFAULT = -1
+DIRECT_VOICE_NOT_SPEAKING_BYTES_THRESHOLD = 20  # adjust based on microphone sensitivity

@@ -11,3 +11,6 @@ dependencies = [
     "xxhash"
 ]
 license = { file = "LICENSE" }
+
+[tool.setuptools.packages.find]
+where = ["src"]

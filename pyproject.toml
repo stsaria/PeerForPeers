@@ -4,11 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "P4PCore"
-version = "0.1.1"
+version = "0.1.2"
 description = "PeerForPeers is a secure p2p library"
 dependencies = [
     "cryptography",
-    "xxhash"
+    "xxhash",
+    "pytest",
+    "pytest-asyncio",
 ]
 license = { file = "LICENSE" }
 

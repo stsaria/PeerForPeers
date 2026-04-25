@@ -14,4 +14,4 @@ class P4PRunnerGetSecureNetEvent(P4PEvent):
         if not self._secureNetF.done():
             self._secureNetF.set_result(secureNet)
     async def waitAndGet(self) -> ISecureNet:
-        return await asyncio.wait_for(self._secureNetF)
+        return await asyncio.wait_for(self._secureNetF, None)

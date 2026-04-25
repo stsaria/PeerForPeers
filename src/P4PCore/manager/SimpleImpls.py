@@ -48,6 +48,8 @@ class SimpleListManager(ListManager, Generic[I]):
         self._listLock:Lock = Lock()
     async def insert(self, value:I, index:int = -1) -> None:
         async with self._listLock:
+            if index < 0 and len(self._list) > 0:
+                index = len(self._list)
             self._list.insert(index, value)
     async def change(self, index:int, value:I) -> None:
         async with self._listLock:
@@ -193,7 +195,7 @@ class SimpleAmountLimitedTicketManager(AmountLimitedTokenManager, Generic[T]):
             if not token in self._tokens:
                 return
             self._tokens.remove(token)
-            while len(self._waiters) > 0 and self._waiters[0].done():
+            while len(self._waiters) > 0 and not self._waiters[0].done():
                 fut = self._waiters.pop(0)
                 if fut.done():
                     continue

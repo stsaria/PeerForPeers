@@ -44,7 +44,7 @@ class PacketElementSize:
     PACKET_FLAG=1
     MODE_FLAG=1
     SEQ=8
-    XXHASH = XXHASH_BIT_SIZE/8
+    XXHASH = XXHASH_BIT_SIZE//8
 
 SEQ_MAX_BY_PACKET_ELEMENT_SIZE = (1 << PacketElementSize.SEQ*8)-1
 
@@ -54,7 +54,7 @@ class SecurePacketElementSize(PacketElementSize):
     ED25519_PUBLIC_KEY=32
     ED25519_SIGN=64
     X25519_PUBLIC_KEY=32
-    AES_SALT=32
+    AES_SALT=ANY_UNIQUE_RANDOM_BYTES_SIZE
     CONTENT_TYPE_UUID=16
 
 class PacketFlag(IntEnum):
@@ -72,9 +72,20 @@ class PacketModeFlag(IntEnum):
 def getMaxDataSizeOnAesEncrypted(enableXxhashMode:bool=False) -> int:
     return ((
         SOCKET_BUFFER
-        - PacketElementSize.XXHASH_MODE_FLAG
-        - PacketElementSize.MAGIC
-        - PacketElementSize.PACKET_FLAG
-        - PacketElementSize.MODE_FLAG
-        - PacketElementSize.XXHASH if enableXxhashMode else 0
-    ) * 16) // 16
+        - SecurePacketElementSize.XXHASH_MODE_FLAG
+        - SecurePacketElementSize.MAGIC
+        - SecurePacketElementSize.PACKET_FLAG
+        - SecurePacketElementSize.MODE_FLAG
+        - (SecurePacketElementSize.XXHASH if enableXxhashMode else 0)
+        - SecurePacketElementSize.SEQ
+    ) // 16) * 16
+
+print(((
+        SOCKET_BUFFER
+        - SecurePacketElementSize.XXHASH_MODE_FLAG
+        - SecurePacketElementSize.MAGIC
+        - SecurePacketElementSize.PACKET_FLAG
+        - SecurePacketElementSize.MODE_FLAG
+        - 0
+        - SecurePacketElementSize.SEQ
+    ) // 16) * 16)

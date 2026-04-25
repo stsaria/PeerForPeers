@@ -2,6 +2,7 @@ import os
 import asyncio
 from asyncio import Lock
 from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PublicKey, X25519PrivateKey
+from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 from cryptography.hazmat.primitives.hashes import SHA256
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -15,7 +16,7 @@ class X25519AndAesgcmEncrypter:
     def __init__(self, amIFirstNodeToHello:bool, salt:bytes | None = None):
         self._amIFirstNodeToHello:bool = amIFirstNodeToHello
 
-        self._salt:bytes = salt if not salt is None else os.urandom(ANY_UNIQUE_RANDOM_BYTES_SIZE)
+        self._salt:bytes = salt if not salt is None else os.urandom(SecurePacketElementSize.AES_SALT)
         self._myX25519PrivateKey:X25519PrivateKey = X25519PrivateKey.generate()
         
         self._sharedSecret:bytes | None = None
@@ -41,16 +42,18 @@ class X25519AndAesgcmEncrypter:
                 algorithm=SHA256(),
                 length=32,
                 salt=self._salt,
-                info=X25519S_SHARED_SECRET_AND_AES_KEY_INFO
+                info=info
             ).derive(self._sharedSecret)
         )
     async def derive(self, otherPartyX25519PublicKeyBytes:bytes) -> None:
-        oPK = X25519PublicKey.from_public_bytes(otherPartyX25519PublicKeyBytes)
+        oPK = X25519PublicKey.from_public_bytes(
+            otherPartyX25519PublicKeyBytes
+        )
         async with self._secretsLock:
             await asyncio.to_thread(self._deriveSharedSecretSyncronized, oPK)
             await asyncio.to_thread(self._deriveAesKeySyncronized, X25519S_SHARED_SECRET_AND_AES_KEY_INFO)
-    async def encrypt(self, data:bytes) -> bytes:
-        async with self._aesKey:
+    async def encrypt(self, data:bytes) -> tuple[int, bytes]:
+        async with self._secretsLock:
             if self._aesKey is None:
                 raise Exception("Shared secret and AES key are not derived yet.")
         async with self._seqLock:
@@ -61,7 +64,7 @@ class X25519AndAesgcmEncrypter:
         nonceBA = bytearray(AESGCM_NONCE_SIZE)
         nonceBA[0] = 0x01 if self._amIFirstNodeToHello else 0x00
         nonceBA[AESGCM_NONCE_SIZE-PacketElementSize.SEQ:] = itob(seq, PacketElementSize.SEQ, ENDIAN)
-        return await asyncio.to_thread(self._aesKey.encrypt, bytes(nonceBA), data, None)
+        return seq, await asyncio.to_thread(self._aesKey.encrypt, bytes(nonceBA), data, None)
     async def decrypt(self, encryptedData:bytes, seq:int) -> bytes | None:
         async with self._secretsLock:
             if self._aesKey is None:
@@ -71,7 +74,7 @@ class X25519AndAesgcmEncrypter:
         nonceBA[AESGCM_NONCE_SIZE-PacketElementSize.SEQ:] = itob(seq, PacketElementSize.SEQ, ENDIAN)
         try:
             data = await asyncio.to_thread(self._aesKey.decrypt, bytes(nonceBA), encryptedData, None)
-        except Exception:
+        except InvalidTag:
             return None
         async with self._otherPartySeqLock:
             diff = self._otherPartySeq - seq

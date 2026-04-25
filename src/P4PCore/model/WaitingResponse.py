@@ -1,5 +1,6 @@
 import asyncio
 from asyncio import Future
+from asyncio.exceptions import CancelledError, TimeoutError
 
 from P4PCore.model.Response import Response
 from P4PCore.model.WaitingResponseInfo import WaitingResponseInfo
@@ -15,8 +16,13 @@ class WaitingResponse[OI, RV]:
             return True
         except Exception:
             return False
-    async def waitAndGet(self, timeoutSec:float | None=None) -> Response[RV]:
-        return await asyncio.wait_for(self._responseF, timeout=timeoutSec)
+    async def waitAndGet(self, timeoutSec:float | None=None) -> Response[RV] | None:
+        try:
+            return await asyncio.wait_for(self._responseF, timeout=timeoutSec)
+        except CancelledError:
+            return None
+        except TimeoutError:
+            return None
     @property
     def waitingResponseInfo(self) -> WaitingResponseInfo:
         return self._waitingResponseInfo

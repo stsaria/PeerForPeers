@@ -4,11 +4,9 @@ ENDIAN = "big"
 
 MAGIC = b"P4P"
 
-PROTOCOL_CLIENT = 1
+PROTOCOL_VER = 2
 
-PROTOCOL_VER = 1
-
-MAGIC += bytes([PROTOCOL_CLIENT, PROTOCOL_VER])
+MAGIC += PROTOCOL_VER.to_bytes(4, ENDIAN)
 
 SOCKET_BUFFER = 1400
 STR_ENCODING = "utf-8"
@@ -40,93 +38,54 @@ X25519S_SHARED_SECRET_AND_AES_KEY_INFO = b"X25519S_SHARED_SECRET-AESGCM_KEY"
 MULTIPLE_PEOPLES_SHARED_SECRET_AND_AES_INFO_BASE = b"MULTIPLE_PEOPLES_SHARED_SECRET-AES_INFO"
 
 class PacketElementSize:
-    MAGIC = len(MAGIC)
-    XXHASH_MODE_FLAG = 1
-    RESPONSE_TOKEN = ANY_UNIQUE_RANDOM_BYTES_SIZE
+    MAGIC=len(MAGIC)
+    XXHASH_MODE_FLAG=1
+    RESPONSE_TOKEN=ANY_UNIQUE_RANDOM_BYTES_SIZE
     PACKET_FLAG=1
     MODE_FLAG=1
     SEQ=8
-    XXHASH = XXHASH_BIT_SIZE/8
+    XXHASH = XXHASH_BIT_SIZE//8
 
 SEQ_MAX_BY_PACKET_ELEMENT_SIZE = (1 << PacketElementSize.SEQ*8)-1
+
 class SecurePacketElementSize(PacketElementSize):
-    USER_NAME=64
     PROTOCOL_CLIENT=2
     PROTOCOL_VER=4
     ED25519_PUBLIC_KEY=32
     ED25519_SIGN=64
     X25519_PUBLIC_KEY=32
-    AES_SALT=32
-    
-    IP = 19
-    PORT = 2
-
-    IS_SUCCESS_AGENCY_PING = 1
-
-class ReliablePacketElementSize(PacketElementSize):
-    SESSION_ID=2
-    OPERATOR=1
-    HASH256=32
-    X25519_PUBLIC_KEY=32
-    ED25519_SIGN=64
-    AES_SALT=32
-    SEQ_AND_CHUNK_COUNT=8
-    REDUNDANCY_COUNT=AESGCM_NONCE_SIZE-SEQ_AND_CHUNK_COUNT # 4
-
-class PrivateSecurePacketElementSize(PacketElementSize):
-    ED25519_PUBLIC_KEY=32
-    ED25519_SIGN=64
-    AES_SALT=32
-    SEQ=8
-
-class GossipPacketElementSize(PacketElementSize):
-    XXHASH64=8
-    IP = 19
-    PORT = 2
-    ED25519_PUBLIC_KEY=32
+    AES_SALT=ANY_UNIQUE_RANDOM_BYTES_SIZE
+    CONTENT_TYPE_UUID=16
 
 class PacketFlag(IntEnum):
     EX = 1
     SECURE = 2
-    RELIABLE = 3
-    PRIVATE_SECURE = 4
-    GOSSIP = 5
 
 class PacketModeFlag(IntEnum):
     PING = 1
     PONG = 2
-    HELLO = 3
-    RESP_HELLO = 4
-    SECOND_HELLO = 5
-    MAIN_DATA = 6
-
-    AGENCY_PING = 10
-    RESP_AGENCY_PING = 11
-
-    CHUNK_CHECK = 20
-    RESP_CHUNK_CHECK = 21
-    REDUNDANCY = 22
-
-    GOSSIP = 30
-
-class CommuType(IntEnum):
-    GET_MESSAGE_LIST = 1
-    RESP_GET_MESSAGE_LIST = 2
-    GET_NODE_LIST = 3
-    RESP_GET_NODE_LIST = 4
-    GET_MY_IP_AND_PORT = 5
-    RESP_GET_MY_IP_AND_PORT = 6
-    INVITE_TO_DIRECT_NET = 7
-
-    SEND_MESSAGE = 10
-    SEND_VOICE = 11
+    HELLO = 10
+    RESP_HELLO = 11
+    SECOND_HELLO = 12
+    MAIN_DATA = 13
 
 def getMaxDataSizeOnAesEncrypted(enableXxhashMode:bool=False) -> int:
     return ((
         SOCKET_BUFFER
-        - PacketElementSize.XXHASH_MODE_FLAG
-        - PacketElementSize.MAGIC
-        - PacketElementSize.PACKET_FLAG
-        - PacketElementSize.MODE_FLAG
-        - PacketElementSize.XXHASH if enableXxhashMode else 0
-    ) * 16) // 16
+        - SecurePacketElementSize.XXHASH_MODE_FLAG
+        - SecurePacketElementSize.MAGIC
+        - SecurePacketElementSize.PACKET_FLAG
+        - SecurePacketElementSize.MODE_FLAG
+        - (SecurePacketElementSize.XXHASH if enableXxhashMode else 0)
+        - SecurePacketElementSize.SEQ
+    ) // 16) * 16
+
+print(((
+        SOCKET_BUFFER
+        - SecurePacketElementSize.XXHASH_MODE_FLAG
+        - SecurePacketElementSize.MAGIC
+        - SecurePacketElementSize.PACKET_FLAG
+        - SecurePacketElementSize.MODE_FLAG
+        - 0
+        - SecurePacketElementSize.SEQ
+    ) // 16) * 16)

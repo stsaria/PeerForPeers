@@ -8,9 +8,11 @@ from P4PCore.abstract.HasLoop import HasLoop
 from P4PCore.abstract.NetHandler import NetHandler
 from P4PCore.interface.NetHandlerRegistry import NetHandlerRegistry
 from P4PCore.manager.SimpleImpls import SimpleCannotDeleteAndOverwriteKVManager
-from P4PCore.protocol.Protocol import MAGIC, SOCKET_BUFFER, PacketElementSize, PacketFlag
+from P4PCore.protocol.Protocol import ENDIAN, MAGIC, SOCKET_BUFFER, PacketElementSize, PacketFlag
 from P4PCore.protocol.ProgramProtocol import NET_SEMAPHORE
 from P4PCore.model.NetConfig import NetConfig
+from P4PCore.util import BytesSplitter
+from P4PCore.util.BytesCoverter import btoi
 
 logger = logging.getLogger()
 
@@ -20,7 +22,9 @@ class NetServerProtocol(DatagramProtocol):
         self._sem:Semaphore = semaphore
 
         self.transport:DatagramTransport = None
-        self._firewallFunc:Callable[[bytes, tuple[str, int]], Awaitable[bool]] = lambda data, addr: asyncio.sleep(0) or asyncio.Future()
+        async def fF(data:bytes, addr:tuple[str, int]) -> bool:
+            return True
+        self._firewallFunc:Callable[[bytes, tuple[str, int]], Awaitable[bool]] = fF
     def connection_made(self, transport:DatagramTransport):
         self.transport = transport
     def setFirewall(self, firewallFunc:Callable[[bytes, tuple[str, int]], Awaitable[bool]]) -> None:
@@ -28,19 +32,28 @@ class NetServerProtocol(DatagramProtocol):
     async def _run(self, data:bytes, addr:tuple[str, int]) -> None:
         if not await self._firewallFunc(data, addr):
             return
-        elif not (handler := await self._handlers.get(PacketFlag(data[:PacketElementSize.PACKET_FLAG]))):
+        pFlag, mainData = BytesSplitter.split(
+            data,
+            PacketElementSize.PACKET_FLAG,
+            includeRest=True
+        )
+        try:
+            pFlag = PacketFlag(btoi(pFlag, ENDIAN))
+        except Exception:
+            return
+        if not (handler := await self._handlers.get(pFlag)):
             return
         async with self._sem:
             try:
-                await handler.handle(data, addr)
+                await handler.handle(mainData, addr)
             except Exception:
                 logger.exception("Unhandled handler exception")
     def datagram_received(self, data:bytes, addr:tuple[str, int]) -> None:
         if len(data) > SOCKET_BUFFER:
             return
-        elif data[:PacketElementSize.MAGIC] != MAGIC:
+        elif data[:len(MAGIC)] != MAGIC:
             return
-        asyncio.create_task(self._run(data, addr))
+        asyncio.create_task(self._run(data[len(MAGIC):], addr))
 
 class Net(NetHandlerRegistry, HasLoop):
     def __init__(self, netConfig: NetConfig) -> None:
@@ -53,14 +66,14 @@ class Net(NetHandlerRegistry, HasLoop):
 
         self._sem = Semaphore(NET_SEMAPHORE)
     
-    async def registerHandler(self, packetFlag:PacketFlag, handler:NetHandler) -> None:
-        await self.__handlers.add(packetFlag, handler)
+    async def registerHandler(self, packetFlag:PacketFlag, handler:NetHandler) -> bool:
+        return await self.__handlers.add(packetFlag, handler)
     def sendTo(self, data:bytes, addr:tuple[str, int]) -> bool:
         if not (p := (self._protocolV6 if ':' in addr[0] else self._protocolV4)):
             return False
         elif not (t := p.transport):
             return False
-        t.sendto(data, addr)
+        t.sendto(MAGIC+data, addr)
         return True
 
     def isRunning(self) -> bool:

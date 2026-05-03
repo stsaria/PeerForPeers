@@ -66,6 +66,14 @@ class Net(NetHandlerRegistry, HasLoop):
 
         self._sem = Semaphore(NET_SEMAPHORE)
     
+    def setV4Firewall(self, firewallFunc:Callable[[bytes, tuple[str, int]], Awaitable[bool]]) -> bool:
+        if pV4 := self._protocolV4:
+            pV4.setFirewall(firewallFunc)
+    
+    def setV6Firewall(self, firewallFunc:Callable[[bytes, tuple[str, int]], Awaitable[bool]]) -> bool:
+        if pV6 := self._protocolV6:
+            pV6.setFirewall(firewallFunc)
+    
     async def registerHandler(self, packetFlag:PacketFlag, handler:NetHandler) -> bool:
         return await self.__handlers.add(packetFlag, handler)
     def sendTo(self, data:bytes, addr:tuple[str, int]) -> bool:

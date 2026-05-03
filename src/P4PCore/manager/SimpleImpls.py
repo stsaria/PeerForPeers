@@ -17,20 +17,20 @@ class SimpleSetManager(SetManager, Generic[I]):
     def __init__(self):
         self._set:set[I] = set()
         self._setLock:Lock = Lock()
-    async def add(self, value:I) -> bool:
+    async def add(self, item:I) -> bool:
         async with self._setLock:
-            if value in self._set:
+            if item in self._set:
                 return False
-            self._set.add(value)
+            self._set.add(item)
         return True
-    async def contains(self, value:I) -> bool:
+    async def contains(self, item:I) -> bool:
         async with self._setLock:
-            return value in self._set
-    async def remove(self, value:I) -> bool:
+            return item in self._set
+    async def remove(self, item:I) -> bool:
         async with self._setLock:
-            if not value in self._set:
+            if not item in self._set:
                 return False
-            self._set.remove(value)
+            self._set.remove(item)
         return True
     async def clear(self) -> None:
         async with self._setLock:
@@ -46,11 +46,11 @@ class SimpleListManager(ListManager, Generic[I]):
     def __init__(self,):
         self._list:list[I] = []
         self._listLock:Lock = Lock()
-    async def insert(self, value:I, index:int = -1) -> None:
+    async def insertNext(self, value:I, index:int = -1) -> None:
         async with self._listLock:
-            if index < 0 and len(self._list) > 0:
-                index = len(self._list)
-            self._list.insert(index, value)
+            if index < 0:
+                index = len(self._list) - abs(index)
+            self._list.insert(index+1, value)
     async def change(self, index:int, value:I) -> None:
         async with self._listLock:
             self._list[index] = value
@@ -68,6 +68,9 @@ class SimpleListManager(ListManager, Generic[I]):
             if not value in self._list:
                 return -1
             return self._list.index(value)
+    async def getAll(self) -> list[I]:
+        async with self._listLock:
+            return self._list.copy()
     async def delete(self, index:int) -> None:
         async with self._listLock:
             del self._list[index]
@@ -127,10 +130,22 @@ class _ReadKVMixin(ReadableKV, Generic[K, V]):
     async def getAll(self:_BaseKVManager[K, V]) -> dict[K, V]:
         async with self._dictLock:
             return dict(self._dict)
+    async def len(self:_BaseKVManager[K, V]) -> int:
+        async with self._dictLock:
+            return len(self._dict)
 class _ReadBiKVMixin(ReadableBiKV, Generic[K, V]):
+    async def get(self:_BaseBiKVManager[K, V], key:K) -> V | None:
+        async with self._dictLock:
+            return self._dict.get(key)
     async def getKey(self:_BaseBiKVManager[K, V], value:V) -> K | None:
         async with self._dictLock:
             return self._rDict.get(value)
+    async def getAll(self:_BaseBiKVManager[K, V]) -> dict[K, V]:
+        async with self._dictLock:
+            return dict(self._dict)
+    async def len(self:_BaseBiKVManager[K, V]) -> int:
+        async with self._dictLock:
+            return len(self._dict)
 class _DeleteKVMixin(DeletableKV, Generic[K, V]):
     async def delete(self:_BaseKVManager[K, V], key:K) -> V | None:
         async with self._dictLock:

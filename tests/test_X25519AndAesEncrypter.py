@@ -1,3 +1,4 @@
+from P4PCore.protocol.ProgramProtocol import ENCRYPTER_OTHER_PARTY_SEQ_WINDOW
 from cryptography.exceptions import InvalidTag
 import pytest
 from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
@@ -96,10 +97,50 @@ class TestX25519AndAesgcmEncrypter:
         s2, enc2 = await encrypter1.encrypt(data2)
         s3, enc3 = await encrypter1.encrypt(data3)
 
-        dec1 = await encrypter2.decrypt(enc1, s1)
-        dec2 = await encrypter2.decrypt(enc2, s2)
-        dec3 = await encrypter2.decrypt(enc3, s3)
+        assert await encrypter2.decrypt(enc1, s1) == data1
+        assert await encrypter2.decrypt(enc2, s2) == data2
+        assert await encrypter2.decrypt(enc3, s3) == data3
+    
+    @pytest.mark.asyncio
+    async def testDecryptWithUnorderSeqs(self):
+        encrypter1 = X25519AndAesgcmEncrypter(True)
+        encrypter2 = X25519AndAesgcmEncrypter(False, salt=encrypter1.salt)
 
-        assert dec1 == data1
-        assert dec2 == data2
-        assert dec3 == data3
+        pubKeyB1 = encrypter1._myX25519PrivateKey.public_key().public_bytes_raw()
+        pubKeyB2 = encrypter2._myX25519PrivateKey.public_key().public_bytes_raw()
+
+        await encrypter1.derive(pubKeyB2)
+        await encrypter2.derive(pubKeyB1)
+
+        data1 = b"first message"
+        data2 = b"second message"
+
+        s1, enc1 = await encrypter1.encrypt(data1)
+        s2, enc2 = await encrypter1.encrypt(data2)
+
+
+        assert await encrypter2.decrypt(enc2, s2) == data2
+        assert await encrypter2.decrypt(enc1, s1) == data1
+    
+    @pytest.mark.asyncio
+    async def testDecryptWithUnorderSeqsButOutOfWindow(self):
+        encrypter1 = X25519AndAesgcmEncrypter(True)
+        encrypter2 = X25519AndAesgcmEncrypter(False, salt=encrypter1.salt)
+
+        pubKeyB1 = encrypter1._myX25519PrivateKey.public_key().public_bytes_raw()
+        pubKeyB2 = encrypter2._myX25519PrivateKey.public_key().public_bytes_raw()
+
+        await encrypter1.derive(pubKeyB2)
+        await encrypter2.derive(pubKeyB1)
+
+        w = ENCRYPTER_OTHER_PARTY_SEQ_WINDOW
+
+        encs = [
+            ((data := f"{i}st message".encode(),) + await encrypter1.encrypt(data))
+            for i in range(w+1)
+        ]
+        encs.reverse()
+
+        for i in range(w+1):
+            enc = encs[i]
+            assert await encrypter2.decrypt(enc[2], enc[1]) == (None if i == w else enc[0])

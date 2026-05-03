@@ -2,7 +2,7 @@ import asyncio
 import pytest
 from P4PCore.manager.SimpleImpls import *
 
-class TestSimpleSetManager:
+class TestSimpleImplsManager:
     @pytest.mark.asyncio
     async def testAdd(self):
         manager: SimpleSetManager[int] = SimpleSetManager()
@@ -106,27 +106,26 @@ class TestSimpleSetManager:
     @pytest.mark.asyncio
     async def testSimpleListManagerInsert(self):
         manager: SimpleListManager[int] = SimpleListManager()
-        await manager.insert(1)
-        await manager.insert(2)
-        await manager.insert(0, 0)  
-        assert await manager.get(0) == 0
-        assert await manager.get(1) == 1
-        assert await manager.get(2) == 2
+        await manager.insertNext(1)
+        await manager.insertNext(2)
+        await manager.insertNext(0, 0)  
+        assert await manager.get(0) == 1
+        assert await manager.get(1) == 0
 
     @pytest.mark.asyncio
     async def testSimpleListManagerChange(self):
         manager: SimpleListManager[int] = SimpleListManager()
-        await manager.insert(1)
-        await manager.insert(2)
+        await manager.insertNext(1)
+        await manager.insertNext(2)
         await manager.change(0, 10)
         assert await manager.get(0) == 10
 
     @pytest.mark.asyncio
     async def testSimpleListManagerGet(self):
         manager: SimpleListManager[int] = SimpleListManager()
-        await manager.insert(1)
-        await manager.insert(2)
-        await manager.insert(3)
+        await manager.insertNext(1)
+        await manager.insertNext(2)
+        await manager.insertNext(3)
         assert await manager.get(0) == 1
         assert await manager.get(-1) == 3
         assert await manager.get(10) is None  
@@ -134,25 +133,25 @@ class TestSimpleSetManager:
     @pytest.mark.asyncio
     async def testSimpleListManagerGetLength(self):
         manager: SimpleListManager[int] = SimpleListManager()
-        await manager.insert(1)
-        await manager.insert(2)
+        await manager.insertNext(1)
+        await manager.insertNext(2)
         assert await manager.getLength() == 2
 
     @pytest.mark.asyncio
     async def testSimpleListManagerGetIndex(self):
         manager: SimpleListManager[int] = SimpleListManager()
-        await manager.insert(1)
-        await manager.insert(2)
-        await manager.insert(3)
+        await manager.insertNext(1)
+        await manager.insertNext(2)
+        await manager.insertNext(3)
         assert await manager.getIndex(2) == 1
         assert await manager.getIndex(99) == -1
 
     @pytest.mark.asyncio
     async def testSimpleListManagerDelete(self):
         manager: SimpleListManager[int] = SimpleListManager()
-        await manager.insert(1)
-        await manager.insert(2)
-        await manager.insert(3)
+        await manager.insertNext(1)
+        await manager.insertNext(2)
+        await manager.insertNext(3)
         await manager.delete(1)
         assert await manager.get(0) == 1
         assert await manager.get(1) == 3
@@ -160,9 +159,9 @@ class TestSimpleSetManager:
     @pytest.mark.asyncio
     async def testSimpleListManagerPop(self):
         manager: SimpleListManager[int] = SimpleListManager()
-        await manager.insert(1)
-        await manager.insert(2)
-        await manager.insert(3)
+        await manager.insertNext(1)
+        await manager.insertNext(2)
+        await manager.insertNext(3)
         popped = await manager.pop(0)
         assert popped == 1
         assert await manager.getLength() == 2
@@ -170,9 +169,9 @@ class TestSimpleSetManager:
     @pytest.mark.asyncio
     async def testSimpleListManagerDeleteValue(self):
         manager: SimpleListManager[int] = SimpleListManager()
-        await manager.insert(1)
-        await manager.insert(2)
-        await manager.insert(3)
+        await manager.insertNext(1)
+        await manager.insertNext(2)
+        await manager.insertNext(3)
         await manager.deleteValue(2)
         assert await manager.get(0) == 1
         assert await manager.get(1) == 3
@@ -180,8 +179,8 @@ class TestSimpleSetManager:
     @pytest.mark.asyncio
     async def testSimpleListManagerClear(self):
         manager: SimpleListManager[int] = SimpleListManager()
-        await manager.insert(1)
-        await manager.insert(2)
+        await manager.insertNext(1)
+        await manager.insertNext(2)
         await manager.clear()
         assert await manager.getLength() == 0
 

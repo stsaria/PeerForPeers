@@ -2,8 +2,7 @@ from uuid import uuid5
 
 from P4PCore.abstract.NetHandler import NetHandler
 from P4PCore.core.SecureNet import SecureNet
-from P4PCore.defaultPlugin.interface.IDefaultPluginsRunner import IDefaultPluginsRunner
-from P4PCore.defaultPlugin.interface.IPluginIdentifiesLister import IPluginIdentifiesLister
+from P4PCore.defaultPlugin.manager.PluginIdentifies import PluginIdentifies
 from P4PCore.defaultPlugin.protocol.Protocol import *
 from P4PCore.manager.WaitingResponses import WaitingResponses
 from P4PCore.model.NodeIdentify import NodeIdentify
@@ -18,23 +17,25 @@ from P4PCore.util.BytesCoverter import btoi, itob
 VERSION = 1
 UUID_FLAG = uuid5(DEFAULT_PLUGIN_BASE_UUID4S["PluginIdentifiesLister"], str(VERSION))
 
-class PluginIdentifiesLister(IPluginIdentifiesLister, NetHandler):
-    _runner:IDefaultPluginsRunner
+class PluginIdentifiesLister(NetHandler):
     _secureNet:SecureNet
     _waitingResponses:WaitingResponses
+    _pluginIdentifies:PluginIdentifies
     @classmethod
-    async def create(cls, secureNet:SecureNet) -> "PluginIdentifiesLister":
+    async def create(cls, secureNet:SecureNet, pluginIdentifies:PluginIdentifies) -> "PluginIdentifiesLister":
         inst = cls()
 
+        inst._secureNet = secureNet
         inst._waitingResponses = WaitingResponses()
+        inst._pluginIdentifies = pluginIdentifies
 
-        await secureNet.registerHandler(UUID_FLAG, inst)
+        await inst._secureNet.registerHandler(UUID_FLAG, inst)
 
         return inst
-    def setRunner(self, runner:IDefaultPluginsRunner) -> None:
-        self._runner = runner
-        self._secureNet = self._runner.baseRunner.secureNet
     async def getUUIDs(self, to:tuple[str, int] | NodeIdentify) -> list[UUID] | None:
+        """
+        Get the specified node's plugin identifies.
+        """
         if isinstance(to, NodeIdentify):
             to = to.addr
         async with self._waitingResponses.open(WaitingResponse[None, list[UUID]](WaitingResponseInfo(to))) as c:
@@ -62,7 +63,7 @@ class PluginIdentifiesLister(IPluginIdentifiesLister, NetHandler):
                 UUID_FLAG.bytes
                 +itob(PluginsListerModeFlag.RESP_GET_LIST, SimplePluginElementSize.MODE_FLAG, ENDIAN)
                 +i
-                +b"".join([uuid.bytes for uuid in await self._runner.pluginIdentifiesManager.getAll()]),
+                +b"".join([uuid.bytes for uuid in await self._pluginIdentifies.getAll()]),
                 addr
             )
         elif mFlag == PluginsListerModeFlag.RESP_GET_LIST.value:

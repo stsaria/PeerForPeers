@@ -2,6 +2,8 @@ import asyncio
 
 from P4PCore.abstract.NetHandler import NetHandler
 from P4PCore.core.Net import Net
+from P4PCore.event.NetLikeRecvedEvent import NetLikeRecvedEvent
+from P4PCore.manager.Events import Events
 from P4PCore.manager.WaitingResponses import WaitingResponses
 from P4PCore.model.Response import Response
 from P4PCore.model.WaitingResponse import WaitingResponse
@@ -13,12 +15,14 @@ from P4PCore.util.BytesCoverter import *
 
 class PingPongNet(NetHandler):
     _net:Net
+    _events:Events
     _waitingResponses:WaitingResponses
     @classmethod
-    async def create(cls, net:Net) -> "PingPongNet":
+    async def create(cls, net:Net, events:Events) -> "PingPongNet":
         inst = cls()
 
         inst._net = net
+        inst._events = events
         inst._waitingResponses = WaitingResponses()
 
         await inst._net.registerHandler(PacketFlag.PINGPONG, inst)
@@ -41,6 +45,7 @@ class PingPongNet(NetHandler):
             return asyncio.get_running_loop().time() - sT
     
     async def handle(self, data:bytes, addr:tuple[str, int]) -> None:
+        await self._events.triggerEvent(NetLikeRecvedEvent[PingPongNet](self, False, data, addr))
         if len(data) != (
             PacketElementSize.MODE_FLAG
             +PacketElementSize.RESPONSE_IDENTIFY

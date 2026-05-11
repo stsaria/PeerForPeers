@@ -1,6 +1,6 @@
 from enum import IntEnum
 
-def itob(i:int | IntEnum, size:int, endian:str, signed=False) -> bytes:
+def itob(i:int | IntEnum, size:int, endian:str, signed:bool=False) -> bytes:
     return (i.value if isinstance(i, IntEnum) else i).to_bytes(size, endian, signed=signed)
 
 def btoi(bI:bytes, endian:str, signed=False) -> int:

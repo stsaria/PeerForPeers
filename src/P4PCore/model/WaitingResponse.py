@@ -9,8 +9,8 @@ class WaitingResponse[OI, RV]:
     def __init__(self, waitingResponseInfo:WaitingResponseInfo, otherInfo:OI=None):
         self._waitingResponseInfo:WaitingResponseInfo = waitingResponseInfo
         self._otherInfo:OI = otherInfo
-        self._responseF:Future[Response[RV]] = Future()
-    def setResponse(self, response:Response[RV]) -> bool:
+        self._responseF:Future[Response[RV] | None] = Future()
+    def setResponse(self, response:Response[RV] | None) -> bool:
         try:
             self._responseF.set_result(response)
             return True

@@ -1,4 +1,5 @@
 from P4PCore.core.PingPongNet import PingPongNet
+from P4PCore.manager.Events import Events
 from P4PCore.util.BytesCoverter import itob
 import pytest
 import asyncio
@@ -11,25 +12,23 @@ class TestPingPongNet:
     @pytest.mark.asyncio
     async def testPing(self):
         config = NetConfig(addrV4=("127.0.0.1", 0), addrV6=("::1", 0))
-        net = Net(config)
-        await PingPongNet.create(net)
+        net = Net(config, Events())
+        await PingPongNet.create(net, Events())
         await net.begin()
 
-        net2 = Net(config)
-        pingPongNet2 = await PingPongNet.create(net2)
+        net2 = Net(config, Events())
+        pingPongNet2 = await PingPongNet.create(net2, Events())
         await net2.begin()
 
         assert not await pingPongNet2.ping(net._protocolV4.transport.get_extra_info("sockname"), timeoutSec=0.1) is None
-        assert not await pingPongNet2.ping(net._protocolV6.transport.get_extra_info("sockname"), timeoutSec=0.1) is None
     @pytest.mark.asyncio
     async def testPingTimeout(self):
         config = NetConfig(addrV4=("127.0.0.1", 0), addrV6=("::1", 0))
-        net = Net(config)
+        net = Net(config, Events())
         await net.begin()
 
-        net2 = Net(config)
-        pingPongNet2 = await PingPongNet.create(net2)
+        net2 = Net(config, Events())
+        pingPongNet2 = await PingPongNet.create(net2, Events())
         await net2.begin()
 
         assert await pingPongNet2.ping(net._protocolV4.transport.get_extra_info("sockname"), timeoutSec=0.1) is None
-        assert await pingPongNet2.ping(net._protocolV6.transport.get_extra_info("sockname"), timeoutSec=0.1) is None

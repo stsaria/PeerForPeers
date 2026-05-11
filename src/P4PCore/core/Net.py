@@ -6,7 +6,9 @@ from typing import Awaitable, Callable
 
 from P4PCore.abstract.HasLoop import HasLoop
 from P4PCore.abstract.NetHandler import NetHandler
+from P4PCore.event.NetLikeRecvedEvent import NetLikeRecvedEvent
 from P4PCore.interface.NetHandlerRegistry import NetHandlerRegistry
+from P4PCore.manager.Events import Events
 from P4PCore.manager.SimpleImpls import SimpleCannotDeleteAndOverwriteKVManager
 from P4PCore.protocol.Protocol import ENDIAN, MAGIC, SOCKET_BUFFER, PacketElementSize, PacketFlag
 from P4PCore.protocol.ProgramProtocol import NET_SEMAPHORE
@@ -14,23 +16,16 @@ from P4PCore.model.NetConfig import NetConfig
 from P4PCore.util import BytesSplitter
 from P4PCore.util.BytesCoverter import btoi
 
-logger = logging.getLogger()
-
 class NetServerProtocol(DatagramProtocol):
-    def __init__(self, handlers:SimpleCannotDeleteAndOverwriteKVManager[PacketFlag, NetHandler], semaphore:Semaphore):
-        self._handlers:SimpleCannotDeleteAndOverwriteKVManager[PacketFlag, NetHandler] = handlers
-        self._sem:Semaphore = semaphore
+    def __init__(self, net:Net):
+        self._net:Net = net
 
         self.transport:DatagramTransport = None
-        async def fF(data:bytes, addr:tuple[str, int]) -> bool:
-            return True
-        self._firewallFunc:Callable[[bytes, tuple[str, int]], Awaitable[bool]] = fF
     def connection_made(self, transport:DatagramTransport):
         self.transport = transport
-    def setFirewall(self, firewallFunc:Callable[[bytes, tuple[str, int]], Awaitable[bool]]) -> None:
-        self._firewallFunc = firewallFunc
     async def _run(self, data:bytes, addr:tuple[str, int]) -> None:
-        if not await self._firewallFunc(data, addr):
+        await self._net._events.triggerEvent(e := NetLikeRecvedEvent(self._net, True, data, addr))
+        if e.isCancelled():
             return
         pFlag, mainData = BytesSplitter.split(
             data,
@@ -41,13 +36,10 @@ class NetServerProtocol(DatagramProtocol):
             pFlag = PacketFlag(btoi(pFlag, ENDIAN))
         except Exception:
             return
-        if not (handler := await self._handlers.get(pFlag)):
+        if not (handler := await self._net._handlers.get(pFlag)):
             return
-        async with self._sem:
-            try:
-                await handler.handle(mainData, addr)
-            except Exception:
-                logger.exception("Unhandled handler exception")
+        async with self._net._sem:
+            await handler.handle(mainData, addr)
     def datagram_received(self, data:bytes, addr:tuple[str, int]) -> None:
         if len(data) > SOCKET_BUFFER:
             return
@@ -56,26 +48,19 @@ class NetServerProtocol(DatagramProtocol):
         asyncio.create_task(self._run(data[len(MAGIC):], addr))
 
 class Net(NetHandlerRegistry, HasLoop):
-    def __init__(self, netConfig: NetConfig) -> None:
-        self._netConfig = netConfig
+    def __init__(self, netConfig:NetConfig, events:Events) -> None:
+        self._netConfig:NetConfig = netConfig
 
-        self.__handlers:SimpleCannotDeleteAndOverwriteKVManager[PacketFlag, NetHandler] = SimpleCannotDeleteAndOverwriteKVManager()
+        self._events:Events = events
+
+        self._handlers:SimpleCannotDeleteAndOverwriteKVManager[PacketFlag, NetHandler] = SimpleCannotDeleteAndOverwriteKVManager()
 
         self._protocolV4:NetServerProtocol = None
         self._protocolV6:NetServerProtocol = None
 
         self._sem = Semaphore(NET_SEMAPHORE)
-    
-    def setV4Firewall(self, firewallFunc:Callable[[bytes, tuple[str, int]], Awaitable[bool]]) -> bool:
-        if pV4 := self._protocolV4:
-            pV4.setFirewall(firewallFunc)
-    
-    def setV6Firewall(self, firewallFunc:Callable[[bytes, tuple[str, int]], Awaitable[bool]]) -> bool:
-        if pV6 := self._protocolV6:
-            pV6.setFirewall(firewallFunc)
-    
     async def registerHandler(self, packetFlag:PacketFlag, handler:NetHandler) -> bool:
-        return await self.__handlers.add(packetFlag, handler)
+        return await self._handlers.add(packetFlag, handler)
     def sendTo(self, data:bytes, addr:tuple[str, int]) -> bool:
         if not (p := (self._protocolV6 if ':' in addr[0] else self._protocolV4)):
             return False
@@ -92,14 +77,16 @@ class Net(NetHandlerRegistry, HasLoop):
     async def begin(self) -> None:
         loop = asyncio.get_running_loop()
         
-        _, self._protocolV4 = await loop.create_datagram_endpoint(
-            lambda: NetServerProtocol(self.__handlers, self._sem),
-            local_addr=self._netConfig.addrV4
-        )
-        _, self._protocolV6 = await loop.create_datagram_endpoint(
-            lambda: NetServerProtocol(self.__handlers, self._sem),
-            local_addr=self._netConfig.addrV6
-        )
+        if self._netConfig.addrV4:
+            _, self._protocolV4 = await loop.create_datagram_endpoint(
+                lambda: NetServerProtocol(self),
+                local_addr=self._netConfig.addrV4
+            )
+        if self._netConfig.addrV6:
+            _, self._protocolV6 = await loop.create_datagram_endpoint(
+                lambda: NetServerProtocol(self),
+                local_addr=self._netConfig.addrV6
+            )
     
     async def end(self) -> None:
         if (v4 := self._protocolV4) and (v4T := v4.transport):

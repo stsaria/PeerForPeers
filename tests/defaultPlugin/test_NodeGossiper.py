@@ -7,6 +7,7 @@ from P4PCore.P4PRunner import P4PRunner
 from P4PCore.core.PingPongNet import PingPongNet
 from P4PCore.defaultPlugin.DefaultPluginsRunner import DefaultPluginsRunner
 from P4PCore.defaultPlugin.core.NodeGossiper import NodeGossiper
+from P4PCore.manager.Events import Events
 from P4PCore.model.NodeIdentify import NodeIdentify
 from P4PCore.model.Settings import Settings
 
@@ -19,9 +20,9 @@ class TestNodeGossiper:
 
         runner2 = await P4PRunner.create(Settings())
         await runner2.begin()
-        await PingPongNet.create(runner2.secureNet.rawNet)
+        await PingPongNet.create(runner2.secureNet.rawNet, Events())
 
-        gossiper = await NodeGossiper.create(runner.secureNet)
+        gossiper = await NodeGossiper.create(runner)
 
         nodeIdentify = NodeIdentify(
             ip="127.0.0.1",
@@ -40,7 +41,7 @@ class TestNodeGossiper:
         runner = await P4PRunner.create(settings)
         await runner.begin()
 
-        gossiper = await NodeGossiper.create(runner.secureNet)
+        gossiper = await NodeGossiper.create(runner)
 
         nodeIdentify = NodeIdentify(
             ip="127.0.0.1",
@@ -48,7 +49,7 @@ class TestNodeGossiper:
             hashableEd25519PublicKey=settings.ed25519Signer.publicKey,
         )
 
-        assert not await gossiper.addNode(nodeIdentify)
+        assert not await gossiper.addNode(nodeIdentify, 1)
         assert await gossiper._nodeInfoBytesToFoundTimes.getAll() == {}
 
     @pytest.mark.asyncio

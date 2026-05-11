@@ -1,4 +1,4 @@
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 from P4PCore.P4PRunner import P4PRunner
 from P4PCore.abstract.NetHandler import NetHandler
@@ -6,12 +6,6 @@ from P4PCore.model.NodeIdentify import NodeIdentify
 from P4PCore.model.Settings import Settings
 import pytest
 import asyncio
-
-from P4PCore.core.SecureNet import SecureNet
-from P4PCore.core.Net import Net
-from P4PCore.model.NetConfig import NetConfig
-from P4PCore.model.Ed25519Signer import Ed25519Signer
-from P4PCore.protocol.Protocol import PacketFlag
 
 class TestSecureNet:
     @pytest.mark.asyncio

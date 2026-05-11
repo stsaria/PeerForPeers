@@ -1,10 +1,7 @@
 from P4PCore.protocol.ProgramProtocol import ENCRYPTER_OTHER_PARTY_SEQ_WINDOW
-from cryptography.exceptions import InvalidTag
 import pytest
-from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
 
 from P4PCore.model.X25519AndAesEncrypter import X25519AndAesgcmEncrypter
-
 
 class TestX25519AndAesgcmEncrypter:
     @pytest.mark.asyncio

@@ -1,5 +1,4 @@
 import pytest
-import asyncio
 from P4PCore.model.WaitingResponseInfo import WaitingResponseInfo
 
 

@@ -2,11 +2,8 @@ from P4PCore.core.PingPongNet import PingPongNet
 from P4PCore.manager.Events import Events
 from P4PCore.util.BytesCoverter import itob
 import pytest
-import asyncio
-from P4PCore.abstract.NetHandler import NetHandler
-from P4PCore.core.Net import Net, NetServerProtocol
+from P4PCore.core.Net import Net
 from P4PCore.model.NetConfig import NetConfig
-from P4PCore.protocol.Protocol import PacketElementSize, PacketFlag, ENDIAN
 
 class TestPingPongNet:
     @pytest.mark.asyncio

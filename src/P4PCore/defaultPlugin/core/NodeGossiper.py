@@ -119,6 +119,7 @@ class NodeGossiper(NetHandler, HasLoop):
                 f.set_result(addr)
             except Exception:
                 pass
+        self._logger.debug(f"Added node {addr[0]}:{addr[1]}, {pubKeyB.hex()}")
         return True
     async def handle(self, data:bytes, _:tuple[str, int]) -> None:
         nodes = []
@@ -143,12 +144,16 @@ class NodeGossiper(NetHandler, HasLoop):
                     return
                 self._nodeCount += 1
             asyncio.create_task(self._pingAndAddNode(nIB))
-        
+    
     async def _gc(self) -> None:
         now = int(asyncio.get_running_loop().time())
+        if await self._nodeInfoBytesToFoundTimes.len() <= GOSSIP_MINIMUM_IDEAL_CONNECTIONS:
+            return
         for n, t in (await self._nodeInfoBytesToFoundTimes.getAll()).items():
             if (t - now) > GOSSIP_TTL_SEC:
                 await self._nodeInfoBytesToFoundTimes.delete(n)
+                lNI = self._bytesToLightNodeIdentify(n)
+                self._logger.debug(f"Deleted node: {lNI[0][0]}:{lNI[0][1]}, {lNI[1].hex()}")
     async def _gossip(self, nodeB:bytes, selectedNodeBs:bytes) -> None:
         addr, pubKeyB = self._bytesToLightNodeIdentify(nodeB)
         if not addr in (await self._baseRunner.secureNet.getAddrs()):

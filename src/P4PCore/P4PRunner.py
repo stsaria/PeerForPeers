@@ -94,7 +94,7 @@ class P4PRunner(HasLoop):
         """
         await self._net.begin()
         await self._events.triggerEvent(CalledBeginFunctionOfRunnerEvent())
-        self._logger.debug(f"Starting P4P : {id(self)}")
+        self._logger.debug(f"Starting P4P : {id(self)} / Ed25519 public key hex: {self._settings.ed25519Signer.publicKey.bytesKey.hex()}")
     async def end(self) -> None:
         """
         End the instance's all.

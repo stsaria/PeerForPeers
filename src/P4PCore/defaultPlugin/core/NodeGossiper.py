@@ -168,8 +168,6 @@ class NodeGossiper(NetHandler, HasLoop):
         while True:
             asyncio.create_task(self._gc())
 
-            self._logger.debug("Sync")
-
             ns = list((await self._nodeInfoBytesToFoundTimes.getAll()).keys())
             nsL = len(ns)
             if nsL > 1:

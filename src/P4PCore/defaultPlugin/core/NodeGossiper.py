@@ -74,7 +74,7 @@ class NodeGossiper(NetHandler, HasLoop):
         aF = btoi(aFB, ENDIAN)
         if aF == AF_INET:
             ipSize = NodeGossiperPacketElementSize.IPV4_BYTES
-        elif  aF == AF_INET6:
+        elif aF == AF_INET6:
             ipSize = NodeGossiperPacketElementSize.IPV6_BYTES
         else:
             return
@@ -112,33 +112,39 @@ class NodeGossiper(NetHandler, HasLoop):
         addr, pubKeyB = self._bytesToLightNodeIdentify(nIB)
         if await self._baseRunner.pingPongNet.ping(addr, timeoutSec) is None:
             return False
-        if not await self._nodeInfoBytesToFoundTimes.add(nIB, int(asyncio.get_running_loop().time())):
-            return False
         if f := await self._waitingPubKeyToAddr.get(pubKeyB):
             try:
                 f.set_result(addr)
             except Exception:
                 pass
+        if not await self._nodeInfoBytesToFoundTimes.add(nIB, int(asyncio.get_running_loop().time())):
+            return False
         self._logger.debug(f"Added node {addr[0]}:{addr[1]}, {pubKeyB.hex()}")
         return True
-    async def handle(self, data:bytes, _:tuple[str, int]) -> None:
-        nodes = []
-        mD = data
-        while len(mD) >= (
+    async def handle(self, data:bytes, addr:tuple[str, int]) -> None:
+        nC = 0
+        data += self._nodeIdentifyToBytes(
+            NodeIdentify(
+                ip=addr[0],
+                port=addr[1],
+                hashableEd25519PublicKey=await self._baseRunner.addrToEd25519PubkeysManager.get(addr)
+            )
+        )
+        while len(data) >= (
             NodeGossiperPacketElementSize.IP_ADDR_FAMILY_BYTES
             +NodeGossiperPacketElementSize.IP_BYTES
             +NodeGossiperPacketElementSize.PORT_BYTES
             +NodeGossiperPacketElementSize.ED25519_PUBLIC_KEY_BYTES
-        ) and len(nodes) <= GOSSIP_MAXIMUM_NODES_FOR_A_NODE:
-            nIB, mD = BytesSplitter.split(
-                mD,
+        ) and nC <= GOSSIP_MAXIMUM_NODES_FOR_A_NODE:
+            nIB, data = BytesSplitter.split(
+                data,
                 NodeGossiperPacketElementSize.IP_ADDR_FAMILY_BYTES
                 +NodeGossiperPacketElementSize.IP_BYTES
                 +NodeGossiperPacketElementSize.PORT_BYTES
                 +NodeGossiperPacketElementSize.ED25519_PUBLIC_KEY_BYTES,
                 includeRest=True
             )
-            nodes.append(nIB)
+            nC += 1
             async with self._nodeCountLock:
                 if self._nodeCount >= GOSSIP_MAXIMUM_CONNECTIONS:
                     return
@@ -153,7 +159,7 @@ class NodeGossiper(NetHandler, HasLoop):
             if (t - now) > GOSSIP_TTL_SEC:
                 await self._nodeInfoBytesToFoundTimes.delete(n)
                 lNI = self._bytesToLightNodeIdentify(n)
-                self._logger.debug(f"Deleted node: {lNI[0][0]}:{lNI[0][1]}, {lNI[1].hex()}")
+                self._logger.debug(f"Deleted node by the ttl gc: {lNI[0][0]}:{lNI[0][1]}, {lNI[1].hex()}")
     async def _gossip(self, nodeB:bytes, selectedNodeBs:bytes) -> None:
         addr, pubKeyB = self._bytesToLightNodeIdentify(nodeB)
         if not addr in (await self._baseRunner.secureNet.getAddrs()):
@@ -166,28 +172,29 @@ class NodeGossiper(NetHandler, HasLoop):
             ) != self._baseRunner.secureNet.HelloResult.SUCCESS:
                 return
         await self._baseRunner.secureNet.sendToSecure(
-            UUID_FLAG.bytes + selectedNodeBs,
+            UUID_FLAG.bytes + b"".join(selectedNodeBs),
             addr
         )
     async def _syncer(self) -> None:
         while True:
-            asyncio.create_task(self._gc())
+            await self._gc()
 
             ns = list((await self._nodeInfoBytesToFoundTimes.getAll()).keys())
             nsL = len(ns)
-            if nsL > 1:
-                nodeBs = random.sample(
+            nodeBs = random.sample(
+                ns,
+                min(GOSSIP_MAXIMUM_NODES_FOR_SENDING, nsL)
+            )
+            selectedNodeBsForNodes = [
+                random.sample(
                     ns,
-                    min(GOSSIP_MAXIMUM_NODES_FOR_SENDING, nsL)
-                )
-                selectedNodeBsForNodes = [
-                    random.sample(
-                        ns,
-                        min(GOSSIP_MAXIMUM_NODES_FOR_A_NODE, nsL)
-                    ) for _ in range(len(nodeBs))
-                ]
-                for nodeB, selectedNodeBs in zip(nodeBs, selectedNodeBsForNodes):
-                    asyncio.create_task(self._gossip(nodeB, selectedNodeBs))
+                    min(GOSSIP_MAXIMUM_NODES_FOR_A_NODE, nsL)
+                ) for _ in nodeBs
+            ]
+            for nodeB, selectedNodeBs in zip(nodeBs, selectedNodeBsForNodes):
+                if nodeB in selectedNodeBs:
+                    selectedNodeBs.remove(nodeB)
+                asyncio.create_task(self._gossip(nodeB, selectedNodeBs))
             await asyncio.sleep(GOSSIP_SYNC_SEC)
     async def begin(self) -> None:
         self._syncerTask = asyncio.create_task(self._syncer())

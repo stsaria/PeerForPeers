@@ -210,7 +210,7 @@ class SecureNet(NetHandler, NetHandlerRegistry):
                 if (r := await c.waitingResponse.waitAndGet(TIME_OUT_SEC)) and r.value:
                     await self._helloingAddrs.remove(addr)
                     break
-        if not await self._addrToEd25519PublicKeys.add(addr, ed25519PubKeyB):
+        if not await self._addrToEd25519PublicKeys.add(addr, HashableEd25519PublicKey.createByBytes(ed25519PubKeyB)):
             await self._helloingAddrs.remove(addr)
             return
         await e.derive(r.value)

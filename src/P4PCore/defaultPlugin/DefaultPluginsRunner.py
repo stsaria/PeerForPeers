@@ -5,11 +5,9 @@ from P4PCore.defaultPlugin.core.NodeGossiper import NodeGossiper
 from P4PCore.defaultPlugin.core.NodeGossiper import NodeGossiper
 from P4PCore.defaultPlugin.core.PluginIdentifiesLister import PluginIdentifiesLister
 from P4PCore.defaultPlugin.manager.PluginIdentifies import PluginIdentifies
-from P4PCore.defaultPlugin.model.Node import Node
 from P4PCore.event.CalledBeginFunctionOfRunnerEvent import CalledBeginFunctionOfRunnerEvent
 from P4PCore.event.CalledEndFunctionOfRunnerEvent import CalledEndFunctionOfRunnerEvent
 from P4PCore.manager.Events import EventListener
-from P4PCore.manager.SimpleImpls import SimpleKVManager, SimpleSetManager
 
 
 class DefaultPluginsRunner:
